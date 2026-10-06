@@ -32,9 +32,9 @@ fmt-check:
 fmt:
     uv run ruff format packages tests
 
-# Strict type check both packages.
+# Strict type check both packages and the test suite.
 typecheck:
-    uv run mypy packages/frictiontune/src/frictiontune packages/frictiontune-train/src/frictiontune_train
+    uv run mypy packages/frictiontune/src/frictiontune packages/frictiontune-train/src/frictiontune_train tests
 
 # Run the fast test suite.
 test:

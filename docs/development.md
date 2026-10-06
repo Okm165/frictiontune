@@ -56,7 +56,7 @@ member.
 ```bash
 uv run ruff check packages tests
 uv run ruff format packages tests
-uv run mypy packages/frictiontune/src/frictiontune packages/frictiontune-train/src/frictiontune_train
+uv run mypy packages/frictiontune/src/frictiontune packages/frictiontune-train/src/frictiontune_train tests
 ```
 
 Ruff is strict: `E,F,W,I,N,UP,B,A,C4,T20,SIM,RET,PTH,RUF,ANN,TCH,D`. Notable
@@ -74,7 +74,8 @@ settings:
 mypy runs in `strict` mode with the `pydantic.mypy` plugin, plus `extra_checks`
 and the `redundant-expr` / `truthy-bool` / `ignore-without-code` error codes, so
 every suppression must name its error code. `pyarrow`, `textual`, and the torch
-stack ship no stubs and are covered by `ignore_missing_imports` overrides. `disallow_subclassing_any` is relaxed only for `frictiontune.tui.*`,
+stack ship no stubs and are covered by `ignore_missing_imports` overrides. The
+test suite is type-checked under the same policy. `disallow_subclassing_any` is relaxed only for `frictiontune.tui.*`,
 where Textual's bases resolve to `Any`.
 
 ## Tests

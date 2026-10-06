@@ -33,10 +33,11 @@ repos:
         entry: uv run mypy
         language: system
         pass_filenames: false
-        files: ^packages/.*\.py$
+        files: ^(packages|tests)/.*\.py$
         args:
           - packages/frictiontune/src/frictiontune
           - packages/frictiontune-train/src/frictiontune_train
+          - tests
       - id: pytest-fast
         name: pytest (fast)
         entry: uv run pytest -q

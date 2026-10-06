@@ -59,7 +59,7 @@ See [`docs/development.md`](docs/development.md) for the full layout. Key files:
 uv sync --all-packages
 uv run ruff check packages tests
 uv run ruff format packages tests
-uv run mypy packages/frictiontune/src/frictiontune packages/frictiontune-train/src/frictiontune_train
+uv run mypy packages/frictiontune/src/frictiontune packages/frictiontune-train/src/frictiontune_train tests
 uv run pytest
 ```
 
