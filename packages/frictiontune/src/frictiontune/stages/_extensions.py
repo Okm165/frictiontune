@@ -880,7 +880,6 @@ class EvaluateExternal(Stage):
                 "candidate_id": "external",
                 "source": "external",
                 "track": "success",
-                "accept_threshold": 0,
                 "context": clip(prompt, settings.max_context_chars),
                 "completion": clip(completion, settings.max_context_chars),
             },

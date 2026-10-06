@@ -79,7 +79,9 @@ clean, mypy strict clean, tests pass.
   add graph edges in `pipeline/dag.py`, add a `configs/stages/<name>.yaml` block
   if needed, and document it.
 * **Adding a prompt:** create `llm/prompts/library/<name>.md`, call it via
-  `complete_structured`, and add its schema to `domain/responses.py`.
+  `complete_structured`, and add its schema to `domain/responses.py`. Prompts
+  carry policy only; the output JSON contract is generated from the pydantic
+  schema by the gateway, so never hand-write it in the prompt.
 * **Adding a backend:** implement the protocol in `frictiontune-train` and
   register it in `plugin.py`. Import the heavy stack inside methods, never at
   module scope.

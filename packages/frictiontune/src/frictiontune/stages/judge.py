@@ -76,7 +76,6 @@ class Judge(Stage):
                 "candidate_id": candidate.id,
                 "source": candidate.source,
                 "track": candidate.track,
-                "accept_threshold": settings.accept_threshold,
                 "context": clip(render_transcript(candidate.context), settings.max_context_chars),
                 "completion": clip(
                     render_transcript(candidate.completion), settings.max_completion_chars

@@ -123,12 +123,16 @@ LlmClient          # transport: async, cached by content hash, transport-retried
 ```
 
 * **Prompts** live as markdown under `frictiontune/llm/prompts/library/` and are
-  addressed by name. `PromptRegistry` loads them; placeholders drive the call
-  sites, so a prompt and its call site cannot drift silently.
+  addressed by name. A prompt carries *policy* — what to judge, the rubric, and
+  the data boundary — plus `{{ placeholder }}` inputs. It never hand-writes the
+  output JSON.
 * **Structured calls** use `gateway.complete_structured(role, config, prompt_name,
-  values, schema)` and return a validated pydantic instance. On malformed output
-  the gateway asks the model to repair the specific problem, bounded by
-  `max_repairs`; the repair loop is itself a `with_retry` policy.
+  values, schema)` and return a validated pydantic instance. The gateway derives
+  the output contract from `schema` (its JSON Schema) and sends it as an extra
+  system message, so the model, the prompt, and the code share one source of
+  truth. On malformed output the gateway asks the model to repair the specific
+  problem, bounded by `max_repairs`; the repair loop is itself a `with_retry`
+  policy.
 * **Retry is defined once.** `frictiontune.core.retry.with_retry` is the single
   retry primitive. It is used for transport errors *and* for schema repair. There
   is no second, ad-hoc retry definition anywhere.
