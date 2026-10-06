@@ -159,12 +159,16 @@ class FetchBase(Stage):
                 ) from exc
             target.mkdir(parents=True, exist_ok=True)
             ctx.logger.info("downloading base weights", repo_id=settings.repo_id)
-            await with_retry(
-                lambda: asyncio.to_thread(
+
+            async def _download() -> object:
+                return await asyncio.to_thread(
                     snapshot_download,
                     repo_id=settings.repo_id,
                     local_dir=str(target),
-                ),
+                )
+
+            await with_retry(
+                _download,
                 policy=RetryPolicy(max_attempts=3),
                 retry_on=TRANSPORT_RETRYABLE,
                 logger=_log,

@@ -59,6 +59,39 @@ async def test_with_retry_does_not_retry_non_retryable() -> None:
     assert attempts == 1
 
 
+def test_with_retry_serves_synchronous_callers() -> None:
+    attempts = 0
+
+    def flaky() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise ConnectionError("transient")
+        return "ok"
+
+    result = with_retry(
+        flaky,
+        policy=RetryPolicy(max_attempts=4, initial_delay_s=0.0, jitter_s=0.0),
+    )
+
+    assert result == "ok"
+    assert attempts == 3
+
+
+def test_with_retry_sync_reraises_after_exhaustion() -> None:
+    attempts = 0
+
+    def always_fails() -> str:
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError("nope")
+
+    with pytest.raises(TimeoutError):
+        with_retry(always_fails, policy=RetryPolicy(max_attempts=3, initial_delay_s=0.0))
+
+    assert attempts == 3
+
+
 def test_immediate_policy_retries_without_backoff() -> None:
     policy = RetryPolicy.immediate(3)
 

@@ -97,13 +97,21 @@ class RewardComposer:
         if not self._judge_url:
             return 0.0
         import httpx
+        from frictiontune.core.retry import RetryPolicy, with_retry
+        from frictiontune.llm.transport import TRANSPORT_RETRYABLE
 
-        response = httpx.post(
-            self._judge_url,
-            json={"prompt": prompt, "completion": completion},
-            timeout=self._judge_timeout,
-        )
-        response.raise_for_status()
+        url = self._judge_url
+
+        def _post() -> httpx.Response:
+            response = httpx.post(
+                url,
+                json={"prompt": prompt, "completion": completion},
+                timeout=self._judge_timeout,
+            )
+            response.raise_for_status()
+            return response
+
+        response = with_retry(_post, policy=RetryPolicy(), retry_on=TRANSPORT_RETRYABLE)
         payload = response.json()
         if isinstance(payload, dict) and isinstance(payload.get("score"), (int, float)):
             return float(payload["score"])

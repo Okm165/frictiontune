@@ -12,7 +12,7 @@ HTTP stacks used here do not raise those:
 Without naming them, a dropped connection or a 429 would never be retried. This
 is the single definition of a retryable transport failure, passed to the one
 retry primitive by every HTTP caller in the workspace: the chat client, the
-embedding backend, the agent rollout, and base-weight downloads.
+embedding backend, the agent rollout, base-weight downloads, and the GRPO judge.
 """
 
 from __future__ import annotations
