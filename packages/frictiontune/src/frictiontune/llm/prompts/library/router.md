@@ -31,6 +31,7 @@ Choose exactly one decision:
 - ambiguous: you cannot tell without deeper inspection.
 
 Rules:
+- Write `reason` before `decision`; commit only after explaining.
 - Prefer escalation over dismissal: if unsure between clearly_clean and
   anything else, choose ambiguous. A missed friction episode is worse than an
   unnecessary deep analysis.

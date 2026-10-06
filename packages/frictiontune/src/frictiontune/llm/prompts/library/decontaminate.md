@@ -23,6 +23,7 @@ language, or a framework are NOT contaminated. Judge whether the evaluation's
 task and solution are genuinely present in the training example.
 
 Rules:
+- Write `reason` before `contaminated`; compare the tasks before deciding.
 - When in doubt between contaminated and clean, report contamination: a leak
   invalidates the eval number, which is worse than dropping a fair test.
 - Set `tier` to the strongest degree that applies when contaminated; otherwise

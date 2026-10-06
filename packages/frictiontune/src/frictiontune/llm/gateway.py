@@ -122,7 +122,14 @@ class LlmGateway:
         ]
 
         async def attempt() -> ModelT:
-            response = await self._client.complete(role, config, history, force_json=True)
+            response = await self._client.complete(
+                role,
+                config,
+                history,
+                force_json=True,
+                response_schema=schema.model_json_schema(),
+                schema_name=schema.__name__,
+            )
             problem = self._validate(response.text, schema)
             if not isinstance(problem, str):
                 return problem

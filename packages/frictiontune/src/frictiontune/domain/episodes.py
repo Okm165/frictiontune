@@ -79,5 +79,6 @@ class ReducedSpan(DomainModel):
 class RouterDecision(DomainModel):
     """Agent response: cheap triage of an episode."""
 
-    decision: Literal["clearly_clean", "needs_analysis", "ambiguous"]
+    # `reason` first: the model explains before it routes.
     reason: str = ""
+    decision: Literal["clearly_clean", "needs_analysis", "ambiguous"]

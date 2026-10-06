@@ -21,6 +21,7 @@ You answer three questions, each with evidence:
    avoid; when in doubt, treat a plausible false block as collateral.
 
 Rules:
+- Write `rationale` before the judgements; reason, then commit.
 - Judge only from the transcript and the rule as written.
 - A rule that never fires is not automatically bad, but it cannot be credited.
 - `prevents` must be true only if the instruction clearly addresses the exact

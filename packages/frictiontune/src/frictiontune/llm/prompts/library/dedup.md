@@ -25,6 +25,7 @@ Not duplicates:
 - the same task but a different and independently useful recovery behaviour.
 
 Rules:
+- Write `reason` before `duplicate`; decide only after comparing the lessons.
 - `similarity` is the strength of the shared lesson, 0 (unrelated) to 1 (the
   same lesson, differently worded). It is not surface text overlap.
 - If they are duplicates, choose which to keep: "a" if A is cleaner or more

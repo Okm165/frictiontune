@@ -49,13 +49,16 @@ class RedactionReview(DomainModel):
 class JudgeVerdict(DomainModel):
     """judge response."""
 
+    # `reason` is declared first so it is emitted before the decision fields:
+    # writing the rationale first makes the score and accept decision deliberate
+    # rather than post-hoc.
+    reason: str = ""
     task_adherence: int = Field(ge=0, le=5)
     correctness: int = Field(ge=0, le=5)
     friction_avoidance: int = Field(ge=0, le=5)
     clarity: int = Field(ge=0, le=5)
     evidence: int = Field(ge=0, le=5)
     accept: bool
-    reason: str = ""
 
     def total(self) -> int:
         """Sum of the rubric scores."""
@@ -71,21 +74,22 @@ class JudgeVerdict(DomainModel):
 class DedupVerdict(DomainModel):
     """dedup response."""
 
+    reason: str = ""
     duplicate: bool
     similarity: float = Field(ge=0.0, le=1.0)
     keep: Literal["a", "b", "either", "neither"] = "either"
-    reason: str = ""
 
 
 class RuleVerdict(DomainModel):
     """rule_verifier response."""
 
+    # `rationale` is declared first so the model reasons before it judges.
+    rationale: str = ""
     fires: bool
     prevents: bool
     collateral: bool
     confidence: float = Field(ge=0.0, le=1.0)
     evidence_turns: list[int] = Field(default_factory=list)
-    rationale: str = ""
 
 
 class FrictionClusters(DomainModel):
@@ -119,9 +123,10 @@ class SimulatedUserTurn(DomainModel):
 class ContaminationVerdict(DomainModel):
     """decontaminate response: whether an eval example leaks into train."""
 
+    # `reason` first: reason before committing to contamination or cleanliness.
+    reason: str = ""
     contaminated: bool
     tier: Literal["t3_semantic", "t4_task"] = "t3_semantic"
-    reason: str = ""
 
 
 class ReduceSummary(DomainModel):

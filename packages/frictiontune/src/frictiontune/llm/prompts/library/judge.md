@@ -25,6 +25,8 @@ Rubric (score each 0–5):
 - evidence: is it grounded, rather than guessing about things it was not shown?
 
 Decision rules:
+- Write `reason` first, before the scores and `accept`: weigh the candidate,
+  then commit.
 - A score of 2 or less on task_adherence or correctness is disqualifying,
   regardless of the other scores.
 - Set `accept` true only when the candidate is genuinely training-worthy: every

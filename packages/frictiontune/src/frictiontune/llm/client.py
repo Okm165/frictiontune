@@ -63,6 +63,31 @@ def _api_key(config: LlmRoleConfig) -> str:
     return "EMPTY"
 
 
+def build_response_format(
+    config: LlmRoleConfig,
+    *,
+    schema: dict[str, Any] | None,
+    schema_name: str,
+    force_json: bool,
+) -> dict[str, Any] | None:
+    """Return the provider ``response_format`` for one call.
+
+    ``json_schema`` asks a capable endpoint for grammar-constrained decoding;
+    when no schema is available it degrades to ``json_object``. ``force_json``
+    guarantees a JSON reply even for a role configured for plain text.
+    """
+    if config.response_format == "json_schema":
+        if schema is None:
+            return {"type": "json_object"}
+        return {
+            "type": "json_schema",
+            "json_schema": {"name": schema_name, "schema": schema, "strict": True},
+        }
+    if force_json or config.response_format == "json_object":
+        return {"type": "json_object"}
+    return None
+
+
 class LlmClient:
     """Async, cached, concurrency-limited OpenAI-compatible client."""
 
@@ -98,6 +123,7 @@ class LlmClient:
         config: LlmRoleConfig,
         messages: Sequence[ChatMessage],
         tools: Sequence[ToolSpec] | None,
+        response_schema: dict[str, Any] | None,
     ) -> str:
         return content_hash(
             {
@@ -108,6 +134,7 @@ class LlmClient:
                 "temperature": config.temperature,
                 "max_tokens": config.max_tokens,
                 "response_format": config.response_format,
+                "response_schema": response_schema,
                 "messages": [message.to_openai() for message in messages],
                 "tools": [tool.to_openai() for tool in tools] if tools else None,
             }
@@ -121,9 +148,11 @@ class LlmClient:
         *,
         tools: Sequence[ToolSpec] | None = None,
         force_json: bool = False,
+        response_schema: dict[str, Any] | None = None,
+        schema_name: str = "response",
     ) -> LlmResponse:
         """Run one chat completion with caching and centralized retries."""
-        cache_key = self._cache_key(role, config, messages, tools)
+        cache_key = self._cache_key(role, config, messages, tools, response_schema)
         if config.cache:
             cached = self._cache.get(f"llm/{role.value}", cache_key)
             if isinstance(cached, dict):
@@ -138,8 +167,11 @@ class LlmClient:
         }
         if tools:
             payload["tools"] = [tool.to_openai() for tool in tools]
-        if force_json or config.response_format == "json_object":
-            payload["response_format"] = {"type": "json_object"}
+        response_format = build_response_format(
+            config, schema=response_schema, schema_name=schema_name, force_json=force_json
+        )
+        if response_format is not None:
+            payload["response_format"] = response_format
 
         async def _call() -> Any:
             return await self._endpoint(config).chat.completions.create(**payload)

@@ -84,6 +84,13 @@ An `LlmRoleConfig` has: `provider`, `base_url`, `model`, `api_key_env`,
 `response_format`, `prompt_ref`, and a `retry` policy. `cache: false` is used for
 `target`/`adapter` because replay must not serve cached generations.
 
+`response_format` is `text`, `json_object`, or `json_schema`. Structured calls
+always carry the pydantic JSON Schema in the messages; setting a role to
+`json_schema` additionally asks the endpoint for grammar-constrained decoding so
+the reply cannot violate the schema. Endpoints that do not support it fall back
+safely — leave roles on `json_object` unless you know the backend honours
+`json_schema`.
+
 ## Embeddings
 
 Embeddings are used only for **retrieval** — proposing candidate neighbours for an

@@ -135,8 +135,10 @@ class _StubClient:
         *,
         tools: Sequence[ToolSpec] | None = None,
         force_json: bool = False,
+        response_schema: dict[str, object] | None = None,
+        schema_name: str = "response",
     ) -> LlmResponse:
-        del role, config, tools, force_json
+        del role, config, tools, force_json, response_schema, schema_name
         self.calls.append(list(messages))
         verdict = (
             '{"task_adherence":5,"correctness":5,"friction_avoidance":5,'
