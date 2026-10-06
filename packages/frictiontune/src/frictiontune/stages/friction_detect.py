@@ -154,7 +154,10 @@ class FrictionDetect(Stage):
             "causes": ", ".join(ctx.config.taxonomy.causes),
             "costs": ", ".join(ctx.config.taxonomy.costs),
             "resolutions": ", ".join(ctx.config.taxonomy.resolutions),
-            "leaves": ", ".join(sorted(ctx.config.taxonomy.leaves)),
+            "leaf_axes": "\n".join(
+                f"- {leaf}: form={form}, cause={cause}"
+                for leaf, (form, cause) in sorted(ctx.config.taxonomy.leaves.items())
+            ),
         }
 
         passes = settings.ensemble if role.temperature > 0.0 else 1

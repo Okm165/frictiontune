@@ -1,6 +1,6 @@
 ---
 name: friction_analyst
-version: "2"
+version: "3"
 role: friction_analyst
 schema: FrictionAnalysis
 description: >
@@ -34,10 +34,10 @@ broken, is good behaviour.
 - cause (why): {{causes}}
 - cost (what it cost the human): {{costs}}
 - resolution (how it ended): {{resolutions}}
-- leaf (the most specific label): {{leaves}}
-
-`leaf` must be consistent with `form` and `cause`; choose the leaf whose
-`form×cause` mapping fits best.
+- leaf (the most specific label): choose exactly one from the list below. Each
+  leaf fixes its own form and cause, so pick the leaf first and set `form` and
+  `cause` to match it exactly:
+{{leaf_axes}}
 
 ## Evidence discipline
 - Every event must cite at least one span pair of a real transcript turn index
@@ -45,6 +45,25 @@ broken, is good behaviour.
 - Verify before you report: if a later turn shows the "problem" was resolved
   without human effort, do not report it.
 - Do not report the same underlying problem twice.
+
+## Worked examples
+Example A — friction present:
+  user (turn 0): "Add retry to the uploader but keep the 30s timeout."
+  assistant (turn 1): adds retry, raises the timeout to 60s, says "done".
+  user (turn 2): "I said keep 30s."
+  → one event: form=rule-following, cause=instruction-ambiguity,
+    leaf=ignored_constraint, cost=effort, resolution=user-correction,
+    evidence=(turn 2, "I said keep 30s").
+    The human spent a turn re-stating a constraint they had already given.
+
+Example B — not friction:
+  assistant (turn 1) runs the tests; one fails on a stale fixture.
+  assistant (turn 2) fixes the fixture, re-runs, all green.
+  → no event: the assistant diagnosed and fixed its own failure, no human turn
+    was spent, and no constraint was broken. Productive iteration is not friction.
+
+These illustrate the boundary, not templates to copy: judge each real episode on
+its own transcript.
 
 ## Resolution
 - user-correction: the human explicitly corrected or re-steered.
