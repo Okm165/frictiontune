@@ -21,7 +21,7 @@ frictiontune/
 │   │       ├── backends/       # protocols + registry + embedding
 │   │       ├── pipeline/       # spec, stage, registry, dag, context, orchestrator
 │   │       ├── stages/         # core stages + _extensions
-│   │       ├── sft/  rules/  reporting/
+│   │       ├── sft/  reporting/
 │   │       ├── tui/            # optional Textual viewer
 │   │       ├── application.py  # wires everything together
 │   │       └── cli.py          # Typer entry point

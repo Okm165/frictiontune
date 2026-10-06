@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from frictiontune.core.hashing import content_hash
 from frictiontune.core.json import dumps, try_loads
 
 if TYPE_CHECKING:
@@ -24,15 +23,6 @@ class ContentCache:
         """Create a content cache rooted at ``root``."""
         self._root = root
         self._enabled = enabled
-
-    @property
-    def enabled(self) -> bool:
-        """Whether reads and writes are active."""
-        return self._enabled
-
-    def key(self, payload: Any) -> str:
-        """Return the canonical cache key for ``payload``."""
-        return content_hash(payload)
 
     def _path(self, namespace: str, key: str) -> Path:
         return self._root / namespace / key[:2] / f"{key}.json"

@@ -120,7 +120,7 @@ def test_call_sites_supply_exactly_their_prompt_variables() -> None:
     # Every structured call site that builds its values inline is checked here.
     # Call sites that delegate to a shared value-builder (the analyst) are
     # covered by test_analyst_values_match_the_analyst_prompt.
-    assert checked >= 19
+    assert checked >= 18
 
 
 def test_analyst_values_match_the_analyst_prompt(config_dir: Path) -> None:

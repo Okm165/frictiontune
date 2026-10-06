@@ -66,10 +66,6 @@ class DependencyGraph:
             target for targets in self._edges.values() for target in targets
         }
 
-    def edges(self) -> Mapping[str, tuple[str, ...]]:
-        """The adjacency map."""
-        return self._edges
-
     def predecessors(self, node: str) -> tuple[str, ...]:
         """Direct upstream stages of ``node``."""
         return tuple(sorted(src for src, targets in self._edges.items() if node in targets))
