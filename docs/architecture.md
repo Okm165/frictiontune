@@ -128,9 +128,11 @@ LlmClient          # transport: async, cached by content hash, transport-retried
   output JSON.
 * **Structured calls** use `gateway.complete_structured(role, config, prompt_name,
   values, schema)` and return a validated pydantic instance. The gateway derives
-  the output contract from `schema` (its JSON Schema) and sends it as an extra
-  system message, so the model, the prompt, and the code share one source of
-  truth. On malformed output the gateway asks the model to repair the specific
+  the output contract from `schema` (its JSON Schema), inlines nested `$ref`s so
+  the contract is self-contained for models that ignore `$defs`, keeps the
+  declaration order (reasoning fields first), and sends it as an extra system
+  message — so the model, the prompt, and the code share one source of truth.
+  On malformed output the gateway asks the model to repair the specific
   problem, bounded by `max_repairs`; the repair loop is itself a `with_retry`
   policy.
 * **Retry is defined once.** `frictiontune.core.retry.with_retry` is the single

@@ -34,6 +34,7 @@ from frictiontune.llm.parsing import extract_json_object
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from typing import Any
 
     from frictiontune.config.models import LlmRoleConfig, RoleName
     from frictiontune.llm.client import LlmClient, LlmResponse
@@ -56,13 +57,60 @@ _SCHEMA_CONTRACT = (
 )
 
 
+def _inline_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a self-contained copy of ``schema`` for the model to read.
+
+    Pydantic renders nested response models as ``$defs``/``$ref``, but local
+    models often ignore ``$defs``. Inline every reference that is not part of a
+    recursive cycle; only genuinely recursive definitions keep their ``$defs``.
+    ``title`` keys are dropped as noise. Key order is preserved, so the
+    deliberate reason-before-decision field order survives.
+    """
+    defs = schema.get("$defs")
+    definitions = defs if isinstance(defs, dict) else {}
+    kept_ref = [False]
+    inlined = {
+        key: _resolve(value, definitions, frozenset(), kept_ref)
+        for key, value in schema.items()
+        if key not in ("$defs", "title")
+    }
+    if kept_ref[0]:
+        inlined["$defs"] = definitions
+    return inlined
+
+
+def _resolve(node: Any, defs: dict[str, Any], stack: frozenset[str], kept_ref: list[bool]) -> Any:
+    """Recursively inline ``$ref`` nodes, protecting against reference cycles."""
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            name = ref.rsplit("/", 1)[-1]
+            target = defs.get(name)
+            if name in stack or not isinstance(target, dict):
+                kept_ref[0] = True
+                return dict(node)
+            return _resolve(target, defs, stack | {name}, kept_ref)
+        return {
+            key: _resolve(value, defs, stack, kept_ref)
+            for key, value in node.items()
+            if key != "title"
+        }
+    if isinstance(node, list):
+        return [_resolve(item, defs, stack, kept_ref) for item in node]
+    return node
+
+
 def schema_contract(schema: type[BaseModel]) -> str:
     """Render the authoritative output contract for ``schema``.
 
     The pydantic model is the source of truth, so the JSON Schema is generated
-    from it rather than duplicated by hand in each prompt.
+    from it rather than duplicated by hand in each prompt. It is inlined and
+    kept in declaration order so the model sees a self-contained contract whose
+    field order matches the reasoning order the prompt asks for.
     """
-    return f"{_SCHEMA_CONTRACT}\n\nJSON Schema:\n{dumps(schema.model_json_schema())}"
+    compact = _inline_refs(schema.model_json_schema())
+    body = dumps(compact, sort_keys=False)
+    return f"{_SCHEMA_CONTRACT}\n\nJSON Schema:\n{body}"
 
 
 class LlmGateway:

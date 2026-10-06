@@ -9,7 +9,8 @@ import frictiontune.domain as domain
 import pytest
 from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.errors import PromptError
-from frictiontune.domain.responses import JudgeVerdict
+from frictiontune.domain.friction import FrictionAnalysis
+from frictiontune.domain.responses import InferredToolSchema, JudgeVerdict
 from frictiontune.llm.client import LlmClient, LlmResponse
 from frictiontune.llm.gateway import LlmGateway, schema_contract
 from frictiontune.llm.prompts.registry import (
@@ -158,6 +159,33 @@ def test_schema_contract_is_generated_from_the_model() -> None:
     # Required and property names come from the pydantic model, not the prompt.
     assert "task_adherence" in contract
     assert "accept" in contract
+
+
+def test_schema_contract_preserves_declaration_order() -> None:
+    contract = schema_contract(JudgeVerdict)
+
+    # `reason` is declared before the scores and `accept`; the injected contract
+    # must keep that order or reason-before-decision is lost.
+    assert contract.index('"reason"') < contract.index('"accept"')
+
+
+def test_schema_contract_inlines_nested_refs() -> None:
+    contract = schema_contract(FrictionAnalysis)
+
+    assert '"$ref"' not in contract
+    assert '"$defs"' not in contract
+    assert '"quote"' in contract  # EvidenceSpan.quote, inlined
+
+
+def test_schema_contract_keeps_recursive_defs() -> None:
+    contract = schema_contract(InferredToolSchema)
+
+    # JsonValue is inherently recursive, so its definitions cannot be inlined.
+    assert '"$defs"' in contract
+
+
+def test_schema_contract_drops_title_noise() -> None:
+    assert '"title"' not in schema_contract(JudgeVerdict)
 
 
 class _StubClient:
