@@ -1,9 +1,30 @@
-"""Tests for the LLM client's structured-output request shaping."""
+"""Tests for the LLM client's request shaping and transport retry."""
 
 from __future__ import annotations
 
-from frictiontune.config.models import LlmRoleConfig
-from frictiontune.llm.client import build_response_format
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, cast
+
+import pytest
+from frictiontune.config.models import LlmRoleConfig, RoleName
+from frictiontune.core.cache import ContentCache
+from frictiontune.core.retry import RetryPolicy
+from frictiontune.llm.client import LlmClient, build_response_format
+from frictiontune.llm.messages import ChatMessage
+from frictiontune.llm.transport import TRANSPORT_RETRYABLE
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
+    RateLimitError,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _SCHEMA: dict[str, object] = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
 
@@ -51,3 +72,66 @@ def test_json_schema_role_degrades_without_a_schema() -> None:
     assert build_response_format(config, schema=None, schema_name="x", force_json=False) == {
         "type": "json_object"
     }
+
+
+@pytest.mark.parametrize(
+    "exc", [APIConnectionError, APITimeoutError, RateLimitError, InternalServerError]
+)
+def test_transport_retryable_includes_provider_transient_errors(
+    exc: type[BaseException],
+) -> None:
+    assert issubclass(exc, TRANSPORT_RETRYABLE)
+
+
+@pytest.mark.parametrize("exc", [BadRequestError, AuthenticationError, NotFoundError])
+def test_transport_retryable_excludes_permanent_errors(exc: type[BaseException]) -> None:
+    assert not issubclass(exc, TRANSPORT_RETRYABLE)
+
+
+class _FakeCompletions:
+    """Replays a queue of outcomes: an exception is raised, anything else returned."""
+
+    def __init__(self, outcomes: list[object]) -> None:
+        self._outcomes = outcomes
+
+    async def create(self, **kwargs: object) -> object:
+        del kwargs
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+class _FakeEndpoint:
+    def __init__(self, outcomes: list[object]) -> None:
+        self.chat = SimpleNamespace(completions=_FakeCompletions(outcomes))
+
+
+def _completion() -> object:
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(message=SimpleNamespace(content='{"ok":true}'), finish_reason="stop")
+        ],
+        model="m",
+        usage=None,
+    )
+
+
+async def test_client_retries_a_provider_transient_error(tmp_path: Path) -> None:
+    client = LlmClient(ContentCache(tmp_path))
+    endpoint = _FakeEndpoint(
+        [
+            APIConnectionError(message="connection dropped", request=cast("Any", None)),
+            _completion(),
+        ]
+    )
+    client._sdk[("", "EMPTY")] = cast("AsyncOpenAI", endpoint)
+    config = LlmRoleConfig(
+        model="m",
+        cache=False,
+        retry=RetryPolicy(max_attempts=3, initial_delay_s=0.0, jitter_s=0.0),
+    )
+
+    response = await client.complete(RoleName.JUDGE, config, [ChatMessage.user("hi")])
+
+    assert response.text == '{"ok":true}'

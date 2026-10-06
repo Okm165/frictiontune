@@ -23,8 +23,10 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
-# Exceptions that are conventionally worth retrying: transient transport and
-# rate-limit failures. Domain/validation errors are handled elsewhere.
+# Transient OS-level transport failures. Provider SDKs raise their *own* error
+# types, which are not OSError subclasses; those extend this set at the transport
+# layer (see ``frictiontune.llm.transport.TRANSPORT_RETRYABLE``). Domain and
+# validation errors are handled elsewhere.
 RETRYABLE: tuple[type[BaseException], ...] = (
     ConnectionError,
     TimeoutError,

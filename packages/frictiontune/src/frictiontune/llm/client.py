@@ -23,7 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from frictiontune.core.errors import LlmError
 from frictiontune.core.hashing import content_hash
 from frictiontune.core.logging import get_logger
-from frictiontune.core.retry import RETRYABLE, with_retry
+from frictiontune.core.retry import with_retry
+from frictiontune.llm.transport import TRANSPORT_RETRYABLE
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -182,7 +183,7 @@ class LlmClient:
                 completion = await with_retry(
                     _call,
                     policy=config.retry,
-                    retry_on=RETRYABLE,
+                    retry_on=TRANSPORT_RETRYABLE,
                     logger=_log,
                 )
         except OSError as exc:
