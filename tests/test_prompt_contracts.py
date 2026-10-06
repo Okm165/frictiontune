@@ -141,3 +141,30 @@ def test_analyst_values_match_the_analyst_prompt(config_dir: Path) -> None:
     )
 
     assert set(values) == needed
+
+
+_WORKED_AXES = re.compile(
+    r"form=(?P<form>[\w/-]+),\s*cause=(?P<cause>[\w/-]+),\s*"
+    r"leaf=(?P<leaf>\w+),\s*cost=(?P<cost>[\w/-]+),\s*"
+    r"resolution=(?P<resolution>[\w/-]+)"
+)
+
+
+def test_analyst_worked_example_axes_match_the_taxonomy(config_dir: Path) -> None:
+    """The analyst's worked example must not contradict the injected taxonomy.
+
+    The example freezes one concrete leaf→axes pair to teach the discipline. If
+    the configured taxonomy moves that leaf's form/cause, the illustration would
+    silently disagree with the ``leaf_axes`` block in the very same prompt, so
+    the two are pinned together here.
+    """
+    taxonomy = load_config(config_dir).taxonomy
+    text = default_registry().get("friction_analyst").system
+    match = _WORKED_AXES.search(text)
+    assert match is not None, "worked-example axes line not found; update this test"
+
+    leaf = match["leaf"]
+    assert leaf in taxonomy.leaves, f"example uses unknown leaf {leaf!r}"
+    assert (match["form"], match["cause"]) == taxonomy.leaves[leaf]
+    assert match["cost"] in taxonomy.costs
+    assert match["resolution"] in taxonomy.resolutions
