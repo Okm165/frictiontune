@@ -41,6 +41,18 @@ Given {{ payload }}, answer.
 :::
 """
 
+_INCLUDE_DOC = """---
+name: incl
+version: "1"
+role: judge
+schema: DemoResponse
+description: An include demo.
+---
+:::system
+{{> greet }}
+:::
+"""
+
 
 def test_render_substitutes_and_rejects_missing() -> None:
     assert render("hi {{ name }}", {"name": "x"}) == "hi x"
@@ -61,6 +73,33 @@ def test_parse_minimal_document() -> None:
 def test_parse_rejects_missing_sections() -> None:
     with pytest.raises(PromptError):
         PromptTemplate.parse("---\nname: x\nversion: '1'\n---\nno sections here\n")
+
+
+def test_includes_expand_recursively() -> None:
+    template = PromptTemplate.parse(
+        _INCLUDE_DOC, partials={"greet": "hello {{> who }}", "who": "world"}
+    )
+
+    assert template.system == "hello world"
+
+
+def test_unknown_partial_is_an_error() -> None:
+    with pytest.raises(PromptError):
+        PromptTemplate.parse(_INCLUDE_DOC, partials={})
+
+
+def test_cyclic_include_is_an_error() -> None:
+    with pytest.raises(PromptError):
+        PromptTemplate.parse(_INCLUDE_DOC, partials={"greet": "{{> greet }}"})
+
+
+def test_library_prompts_have_no_unexpanded_includes() -> None:
+    registry: PromptRegistry = default_registry()
+
+    for name in registry.names():
+        template = registry.get(name)
+        assert "{{>" not in template.system, f"{name} left an include unexpanded"
+        assert "{{>" not in template.user, f"{name} left an include unexpanded"
 
 
 def test_library_contains_the_expected_prompts() -> None:
