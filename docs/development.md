@@ -54,8 +54,8 @@ The shared tool config lives in the root `pyproject.toml` and applies to every
 member.
 
 ```bash
-uv run ruff check packages
-uv run ruff format packages
+uv run ruff check packages tests
+uv run ruff format packages tests
 uv run mypy packages/frictiontune/src/frictiontune packages/frictiontune-train/src/frictiontune_train
 ```
 

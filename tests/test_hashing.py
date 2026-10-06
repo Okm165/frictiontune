@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from frictiontune.core.hashing import (
     combine_hashes,
@@ -12,6 +12,9 @@ from frictiontune.core.hashing import (
     short,
     text_hash,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_content_hash_is_stable_and_order_insensitive_to_keys() -> None:

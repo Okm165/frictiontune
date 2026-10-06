@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
-from pydantic import BaseModel
-
 from frictiontune.core.artifacts import ArtifactStore
 from frictiontune.core.errors import ArtifactError
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class Row(BaseModel):

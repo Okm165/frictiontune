@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from frictiontune.config.loader import load_config, parse_set_overrides
 from frictiontune.config.models import RoleName
 from frictiontune.core.errors import ConfigError
@@ -31,9 +30,7 @@ def test_taxonomy_axes_and_leaves_are_loaded(config_dir: Path) -> None:
     assert cause in config.taxonomy.causes
 
 
-def test_empty_env_expansion_drops_key(
-    config_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_empty_env_expansion_drops_key(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FRICTIONTUNE_CORPUS_DB", raising=False)
 
     config = load_config(config_dir)
@@ -42,9 +39,7 @@ def test_empty_env_expansion_drops_key(
     assert config.paths.base_weights_dir is None
 
 
-def test_set_env_var_becomes_a_path(
-    config_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_env_var_becomes_a_path(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FRICTIONTUNE_CORPUS_DB", "/tmp/sessions.db")
 
     config = load_config(config_dir)
@@ -68,7 +63,9 @@ def test_unknown_key_is_rejected(config_dir: Path) -> None:
 
 
 def test_hardware_can_be_overridden(config_dir: Path) -> None:
-    config = load_config(config_dir, hardware_preset="1x24g", overrides={"hardware": {"devices": 2}})
+    config = load_config(
+        config_dir, hardware_preset="1x24g", overrides={"hardware": {"devices": 2}}
+    )
     assert config.hardware.devices == 2
 
 

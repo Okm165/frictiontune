@@ -20,17 +20,17 @@ sync-train:
 sync-dev:
     uv sync --all-packages
 
-# Lint every package.
+# Lint every package and the test suite.
 lint:
-    uv run ruff check packages
+    uv run ruff check packages tests
 
 # Check formatting without writing.
 fmt-check:
-    uv run ruff format --check packages
+    uv run ruff format --check packages tests
 
 # Apply formatting.
 fmt:
-    uv run ruff format packages
+    uv run ruff format packages tests
 
 # Strict type check both packages.
 typecheck:

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from frictiontune.domain.trace import (
     Message,
     ReasoningPart,
     TextPart,
     ToolPart,
 )
+from pydantic import ValidationError
 
 
 def _message(parts: list[object]) -> Message:

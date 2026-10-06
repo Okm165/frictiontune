@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 
 import pytest
-
 from frictiontune.core.errors import PromptError
 from frictiontune.llm.prompts.registry import (
     PromptRegistry,

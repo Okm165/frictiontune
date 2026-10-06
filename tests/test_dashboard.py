@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from frictiontune.reporting.dashboard import (
     PRIMARY_SIGNAL,
     build_dashboard,
@@ -35,7 +34,9 @@ def test_relative_drop_guards_zero_baseline() -> None:
 
 
 def test_headline_for_higher_better_primary() -> None:
-    primary = make_signal(PRIMARY_SIGNAL, [0.5, 0.5, 0.5], [0.6, 0.6, 0.6], direction="higher_better")
+    primary = make_signal(
+        PRIMARY_SIGNAL, [0.5, 0.5, 0.5], [0.6, 0.6, 0.6], direction="higher_better"
+    )
     dashboard = build_dashboard([primary], episodes=3, seeds=[0, 1, 2])
 
     assert dashboard.friction_drop == pytest.approx(0.2)
