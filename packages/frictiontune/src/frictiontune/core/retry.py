@@ -52,6 +52,20 @@ class RetryPolicy(BaseModel):
             jitter=self.jitter_s,
         )
 
+    @classmethod
+    def immediate(cls, attempts: int) -> RetryPolicy:
+        """A policy that retries at once, for cheap in-process work.
+
+        Schema repair re-asks a model that has just failed validation; a backoff
+        would only add latency, so every retry is immediate.
+        """
+        return cls(
+            max_attempts=attempts,
+            initial_delay_s=0.0,
+            max_delay_s=0.0,
+            jitter_s=0.0,
+        )
+
 
 def _log_retry(*, logger: object | None, retry_state: RetryCallState) -> None:
     if logger is None:

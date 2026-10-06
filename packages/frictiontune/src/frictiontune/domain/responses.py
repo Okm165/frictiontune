@@ -13,6 +13,7 @@ from pydantic import Field
 from frictiontune.core.json import JsonObject
 from frictiontune.domain.profiles import BehaviorDimension
 from frictiontune.domain.trace import DomainModel
+from frictiontune.domain.types import Probability
 
 
 class CompactedToolOutput(DomainModel):
@@ -76,7 +77,7 @@ class DedupVerdict(DomainModel):
 
     reason: str = ""
     duplicate: bool
-    similarity: float = Field(ge=0.0, le=1.0)
+    similarity: Probability
     keep: Literal["a", "b", "either", "neither"] = "either"
 
 
@@ -88,7 +89,7 @@ class RuleVerdict(DomainModel):
     fires: bool
     prevents: bool
     collateral: bool
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: Probability
     evidence_turns: list[int] = Field(default_factory=list)
 
 

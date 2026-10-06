@@ -223,6 +223,7 @@ class Attribute(Stage):
             {
                 "friction_summary": event.summary or f"{event.form}/{event.leaf}",
                 "evidence_turns": evidence_turns,
+                "causes": ", ".join(ctx.config.taxonomy.causes),
                 "transcript": clip(
                     render_transcript(episode.messages), settings.max_transcript_chars
                 ),

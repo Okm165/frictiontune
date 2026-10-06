@@ -1,6 +1,6 @@
 ---
 name: attribution
-version: "3"
+version: "4"
 role: attributor
 schema: Attribution
 description: >
@@ -21,8 +21,7 @@ Rules:
   where it became visible.
 - If the cause is informational (the assistant lacked context), choose the turn
   where it should have gathered that context.
-- `cause` must be one of: context, capability, instruction-ambiguity, tool/env,
-  spec.
+- `cause` must be one of: {{causes}}.
 - If you cannot identify a single decisive step, set `decisive_turn` null and
   explain.
 - `confidence` is your calibrated probability (0–1) that the chosen turn is the

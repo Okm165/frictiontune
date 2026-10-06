@@ -8,7 +8,7 @@ All model access in frictiontune goes through :class:`LlmClient`. It owns:
 * per-role concurrency limiting.
 
 It performs **no** prompt construction and **no** schema repair; those live in
-:mod:`frictiontune.llm.prompts` and :mod:`frictiontune.llm.structured`.
+:mod:`frictiontune.llm.prompts` and :mod:`frictiontune.llm.gateway`.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from frictiontune.core.errors import LlmError
 from frictiontune.core.hashing import content_hash
 from frictiontune.core.logging import get_logger
-from frictiontune.core.retry import with_retry
+from frictiontune.core.retry import RETRYABLE, with_retry
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -182,7 +182,7 @@ class LlmClient:
                 completion = await with_retry(
                     _call,
                     policy=config.retry,
-                    retry_on=(ConnectionError, TimeoutError, OSError),
+                    retry_on=RETRYABLE,
                     logger=_log,
                 )
         except OSError as exc:

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import frictiontune
 import pytest
 from frictiontune.core.retry import RetryPolicy, with_retry
 
@@ -54,3 +57,24 @@ async def test_with_retry_does_not_retry_non_retryable() -> None:
         await with_retry(wrong_type, policy=RetryPolicy(max_attempts=5, initial_delay_s=0.0))
 
     assert attempts == 1
+
+
+def test_immediate_policy_retries_without_backoff() -> None:
+    policy = RetryPolicy.immediate(3)
+
+    assert policy.max_attempts == 3
+    assert policy.initial_delay_s == 0.0
+    assert policy.max_delay_s == 0.0
+    assert policy.jitter_s == 0.0
+
+
+def test_tenacity_is_confined_to_the_retry_module() -> None:
+    root = Path(frictiontune.__file__).parent
+
+    offenders = [
+        path.relative_to(root).as_posix()
+        for path in sorted(root.rglob("*.py"))
+        if path.name != "retry.py" and "tenacity" in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == [], f"tenacity must only be imported by core/retry.py: {offenders}"

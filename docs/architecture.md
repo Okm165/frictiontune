@@ -132,12 +132,17 @@ LlmClient          # transport: async, cached by content hash, transport-retried
   the contract is self-contained for models that ignore `$defs`, keeps the
   declaration order (reasoning fields first), and sends it as an extra system
   message — so the model, the prompt, and the code share one source of truth.
-  On malformed output the gateway asks the model to repair the specific
-  problem, bounded by `max_repairs`; the repair loop is itself a `with_retry`
-  policy.
+  Validation is **strict**: a stringified number or boolean is a malformed reply,
+  not something to coerce. Only two JSON realities are allowed through — an
+  integer literal for a probability (`domain.types.Probability`) and an enum
+  supplied by value (`domain.types.enum_by_value`). On malformed output the
+  gateway asks the model to repair the specific problem, bounded by
+  `max_repairs`; the repair loop is itself a `with_retry` policy.
 * **Retry is defined once.** `frictiontune.core.retry.with_retry` is the single
-  retry primitive. It is used for transport errors *and* for schema repair. There
-  is no second, ad-hoc retry definition anywhere.
+  retry primitive, and `RETRYABLE` is the single set of retryable transport
+  exceptions. Both are used for transport errors *and* schema repair; a test
+  asserts `tenacity` is imported only by `core/retry.py`. There is no second,
+  ad-hoc retry definition anywhere.
 
 Roles (`frictiontune.config.models.RoleName`) are typed names — `router`,
 `compactor`, `friction_analyst`, `judge`, `teacher`, `target`, `adapter`, … Each

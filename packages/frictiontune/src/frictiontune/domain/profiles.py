@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import Field
 
 from frictiontune.domain.trace import DomainModel
+from frictiontune.domain.types import Probability
 
 
 class Attribution(DomainModel):
@@ -12,7 +13,7 @@ class Attribution(DomainModel):
 
     decisive_turn: int | None = Field(default=None, ge=0)
     cause: str
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: Probability
     rationale: str = ""
 
 

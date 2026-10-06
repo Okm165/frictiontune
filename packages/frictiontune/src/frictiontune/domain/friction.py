@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import Field, field_validator
 
 from frictiontune.domain.trace import DomainModel
+from frictiontune.domain.types import Probability
 
 Resolution = Literal["user-correction", "self-recovery", "none"]
 RecoveryTrigger = Literal["self", "user-correction", "none"]
@@ -36,7 +37,7 @@ class FrictionEventDraft(DomainModel):
     leaf: str
     summary: str = ""
     evidence: list[EvidenceSpan] = Field(min_length=1)
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: Probability
 
 
 class FrictionEvent(FrictionEventDraft):

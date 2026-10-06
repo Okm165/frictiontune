@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated
 
 from pydantic import Field
 
 from frictiontune.domain.trace import DomainModel
+from frictiontune.domain.types import enum_by_value
 
 
 class VerifierTier(StrEnum):
@@ -47,7 +49,8 @@ class RuleScope(DomainModel):
 class RuleVerifier(DomainModel):
     """The runtime check for a rule."""
 
-    tier: VerifierTier
+    # Strict validation keeps every other field exact; enums arrive by value.
+    tier: Annotated[VerifierTier, enum_by_value(VerifierTier)]
     spec: str
     evidence: list[str] = Field(default_factory=list)
     failure_message: str = ""

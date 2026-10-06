@@ -10,7 +10,8 @@ It composes exactly three primitives, each defined once:
 
 Structured calls are validated into strict pydantic models; a validation or
 parse failure is surfaced as :class:`LlmSchemaError`, fed back to the model, and
-retried under the same generic policy. No stage ever implements its own retry.
+retried under the same generic policy. No stage ever implements its own retry,
+so every LLM call retries through exactly one mechanism.
 
 The output contract is *derived from the schema*, never hand-written in the
 prompt: :func:`schema_contract` renders the model's JSON Schema and it is sent as
@@ -51,9 +52,10 @@ _REPAIR_PREFIX = (
 
 _SCHEMA_CONTRACT = (
     "Your reply MUST be a single JSON object that conforms exactly to the JSON "
-    "Schema below: use the exact field names, types, and enum values, include every "
-    "required field, and add no field the schema does not define. Reply with the "
-    "JSON object only — no prose and no markdown fences."
+    "Schema below: use the exact field names, types, and enum values, write "
+    "numbers and booleans as JSON literals (5, 0.8, true — never as strings), "
+    "include every required field, and add no field the schema does not define. "
+    "Reply with the JSON object only — no prose and no markdown fences."
 )
 
 
@@ -127,12 +129,7 @@ class LlmGateway:
         self._client = client
         self._registry = registry
         self._max_repairs = max_repairs
-        self._repair_policy = RetryPolicy(
-            max_attempts=max_repairs + 1,
-            initial_delay_s=0.0,
-            max_delay_s=0.0,
-            jitter_s=0.0,
-        )
+        self._repair_policy = RetryPolicy.immediate(max_repairs + 1)
 
     async def complete_text(
         self,
@@ -203,11 +200,16 @@ class LlmGateway:
 
     @staticmethod
     def _validate(text: str, schema: type[ModelT]) -> ModelT | str:
-        """Return a model instance, or a human-readable problem string."""
+        """Return a model instance, or a human-readable problem string.
+
+        Validation is strict: a stringified number or boolean is a malformed
+        reply, not something to coerce. The problem string is fed back to the
+        model by the repair loop.
+        """
         parsed = extract_json_object(text)
         if parsed is None:
             return "reply contained no JSON object"
         try:
-            return schema.model_validate(parsed)
+            return schema.model_validate(parsed, strict=True)
         except ValidationError as exc:
             return exc.json(include_url=False)
