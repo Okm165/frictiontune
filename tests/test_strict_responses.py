@@ -7,8 +7,11 @@ tests pin that behaviour and keep every response schema strict-compatible.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+import frictiontune
 import pytest
 from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.errors import ValidationError as FtValidationError
@@ -256,3 +259,39 @@ async def test_repair_gives_up_after_the_budget() -> None:
 
     # One initial attempt plus exactly one repair.
     assert stub.calls == 2
+
+
+def _structured_call_site_schemas() -> set[str]:
+    """Schema names passed to ``complete_structured`` anywhere in the package."""
+    root = Path(frictiontune.__file__).parent
+    names: set[str] = set()
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "complete_structured"
+                and len(node.args) >= 5
+            ):
+                last = node.args[-1]
+                if isinstance(last, ast.Name):
+                    names.add(last.id)
+    return names
+
+
+def test_every_structured_call_site_has_a_strict_sample() -> None:
+    """A new agent-response schema must not escape strict-mode coverage.
+
+    ``_SAMPLES`` pins strict compatibility for each schema, but only by hand. This
+    guard walks every ``complete_structured`` call site and fails when one uses a
+    schema absent from ``_SAMPLES``, so adding an agent response forces a strict
+    sample rather than silently skipping the check.
+    """
+    covered = {schema.__name__ for schema in _SAMPLES}
+    missing = _structured_call_site_schemas() - covered
+
+    assert not missing, (
+        f"structured call sites use schemas without a strict sample: {sorted(missing)}; "
+        "add one to _SAMPLES"
+    )
