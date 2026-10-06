@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import os
 
-from frictiontune.backends.models import RolloutRequest, RolloutResult, RolloutStep
+from frictiontune.backends.models import RolloutRequest, RolloutResult
 from frictiontune.core.errors import BackendUnavailableError
+from pydantic import ValidationError
 
 
 class HttpRolloutBackend:
@@ -60,17 +61,24 @@ class HttpRolloutBackend:
         return self._parse(payload)
 
     def _parse(self, payload: object) -> RolloutResult:
-        """Parse a runner payload into a typed :class:`RolloutResult`."""
+        """Parse a runner payload into a strictly validated :class:`RolloutResult`.
+
+        Only the contract's own keys are read, so a runner may add metadata;
+        every contract field is then validated strictly, so a malformed agent
+        payload fails loudly instead of being silently coerced or dropped.
+        """
         if not isinstance(payload, dict):
             raise BackendUnavailableError("rollout", "runner returned a non-object payload")
-        raw_steps = payload.get("steps", [])
-        steps: list[RolloutStep] = []
-        if isinstance(raw_steps, list):
-            for step in raw_steps:
-                if isinstance(step, dict):
-                    steps.append(RolloutStep.model_validate(step))
-        return RolloutResult(
-            steps=steps,
-            finished=bool(payload.get("finished", False)),
-            outcome=payload.get("outcome") if isinstance(payload.get("outcome"), str) else None,
-        )
+        try:
+            return RolloutResult.model_validate(
+                {
+                    "steps": payload.get("steps", []),
+                    "finished": payload.get("finished", False),
+                    "outcome": payload.get("outcome"),
+                },
+                strict=True,
+            )
+        except ValidationError as exc:
+            raise BackendUnavailableError(
+                "rollout", f"runner returned a malformed payload: {exc}"
+            ) from exc
