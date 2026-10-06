@@ -10,23 +10,26 @@ deterministically and their evidence unioned.
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from frictiontune.config.models import RoleName
 from frictiontune.domain.episodes import Episode
-from frictiontune.domain.friction import FrictionEvent
 from frictiontune.domain.ids import rule_id
-from frictiontune.domain.responses import InferredToolSchema
 from frictiontune.domain.rules import CompiledRules, RuleLibrary, RuntimeRule
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
-from frictiontune.stages.common import clip, render_transcript
+from frictiontune.stages.common import (
+    clip,
+    read_events_by_episode,
+    read_tool_schemas,
+    render_transcript,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
     from frictiontune.core.json import JsonObject
+    from frictiontune.domain.friction import FrictionEvent
     from frictiontune.pipeline.context import StageContext
 
 _COMPILE_PROMPT = "rule_compiler"
@@ -49,22 +52,6 @@ def _render_friction(events: list[FrictionEvent]) -> str:
             f"{event.summary or event.form} | evidence turns: {turns}"
         )
     return "\n".join(lines)
-
-
-def _read_events(ctx: StageContext) -> dict[str, list[FrictionEvent]]:
-    grouped: dict[str, list[FrictionEvent]] = defaultdict(list)
-    for event in ctx.catalog.stream("friction_events", FrictionEvent):
-        grouped[event.episode_id].append(event)
-    return grouped
-
-
-def _read_schemas(ctx: StageContext) -> list[JsonObject]:
-    if not ctx.catalog.has("tool_schemas"):
-        return []
-    return [
-        schema.model_dump(mode="json")
-        for schema in ctx.catalog.stream("tool_schemas", InferredToolSchema)
-    ]
 
 
 class CompileRules(Stage):
@@ -148,8 +135,8 @@ class CompileRules(Stage):
     async def run(self, ctx: StageContext) -> StageResult:
         """Compile and merge rules across every friction episode."""
         settings = ctx.settings(self.settings_model)
-        grouped = _read_events(ctx)
-        schemas = _read_schemas(ctx)
+        grouped = read_events_by_episode(ctx)
+        schemas = read_tool_schemas(ctx)
         collected: list[RuntimeRule] = []
         episodes_seen = 0
         batch: list[Episode] = []

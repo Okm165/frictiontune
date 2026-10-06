@@ -8,7 +8,6 @@ orchestrator refuses to run a Tier C stage unless ``allow_gated`` is set.
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from pydantic import Field
@@ -38,7 +37,7 @@ from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 from frictiontune.reporting.dashboard import build_dashboard, make_signal, relative_drop
 from frictiontune.reporting.report import render_dashboard
-from frictiontune.stages.common import clip, render_transcript
+from frictiontune.stages.common import clip, read_events_by_episode, render_transcript
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -71,13 +70,6 @@ def _message(role: str, text: str, *, session_id: str, seq: int) -> Message:
 def _chat_transcript(messages: Sequence[ChatMessage], limit: int = 60_000) -> str:
     lines = [f"{message.role}: {message.content}" for message in messages]
     return clip("\n".join(lines), limit)
-
-
-def _read_events(ctx: StageContext) -> dict[str, list[FrictionEvent]]:
-    grouped: dict[str, list[FrictionEvent]] = defaultdict(list)
-    for event in ctx.catalog.stream("friction_events", FrictionEvent):
-        grouped[event.episode_id].append(event)
-    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +227,7 @@ class Attribute(Stage):
     async def run(self, ctx: StageContext) -> StageResult:
         """Attribute every friction event that has an episode."""
         settings = ctx.settings(self.settings_model)
-        grouped = _read_events(ctx)
+        grouped = read_events_by_episode(ctx)
         sink = ctx.jsonl_sink("attributions")
         done = 0
         for episode in ctx.catalog.stream("episodes", Episode):
@@ -501,7 +493,7 @@ class RaftSrft(Stage):
         """Emit success examples from episodes without friction events."""
         settings = ctx.settings(self.settings_model)
         self._min_turns = settings.min_assistant_turns
-        grouped = _read_events(ctx)
+        grouped = read_events_by_episode(ctx)
         sink = ctx.jsonl_sink("sft_raft")
         produced = 0
         seen = 0

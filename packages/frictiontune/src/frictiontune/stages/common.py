@@ -7,16 +7,20 @@ taxonomy validation. No stage re-implements these.
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from typing import TYPE_CHECKING, TypeVar
 
 from frictiontune.core.errors import StageError
+from frictiontune.domain.friction import FrictionEvent
+from frictiontune.domain.responses import InferredToolSchema
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
     from frictiontune.config.models import RunConfig
-    from frictiontune.domain.friction import FrictionEvent
+    from frictiontune.core.json import JsonObject
     from frictiontune.domain.trace import Message
+    from frictiontune.pipeline.context import StageContext
 
 T = TypeVar("T")
 
@@ -42,6 +46,24 @@ def render_transcript(
             label = f"{label}(tool-error)"
         lines.append(f"{index} | {label} | {body}")
     return "\n".join(lines)
+
+
+def read_events_by_episode(ctx: StageContext) -> dict[str, list[FrictionEvent]]:
+    """Group friction events by episode id (events are far smaller than episodes)."""
+    grouped: dict[str, list[FrictionEvent]] = defaultdict(list)
+    for event in ctx.catalog.stream("friction_events", FrictionEvent):
+        grouped[event.episode_id].append(event)
+    return grouped
+
+
+def read_tool_schemas(ctx: StageContext) -> list[JsonObject]:
+    """Load inferred tool schemas as plain JSON objects for a prompt."""
+    if not ctx.catalog.has("tool_schemas"):
+        return []
+    return [
+        schema.model_dump(mode="json")
+        for schema in ctx.catalog.stream("tool_schemas", InferredToolSchema)
+    ]
 
 
 def analyst_prompt_values(
