@@ -65,10 +65,6 @@ class ArtifactCatalog:
                 "ArtifactCatalog", 1, f"missing input {name!r}; available: {available}"
             ) from exc
 
-    def names(self) -> list[str]:
-        """List every published artifact name."""
-        return sorted(self._entries)
-
     def hashes(self, names: Sequence[str]) -> list[str]:
         """Return the content hashes for ``names`` (used for the run id)."""
         return [self.get(name).ref.sha256 for name in names]
@@ -92,14 +88,6 @@ class ArtifactCatalog:
         """Read a JSON artifact."""
         entry = self.get(name)
         return try_loads(entry.path.read_text(encoding="utf-8"))
-
-    def iter_jsonl(self, name: str) -> Iterator[object]:
-        """Iterate a JSONL artifact."""
-        yield from iter_jsonl(self.get(name).path)
-
-    def read_text(self, name: str) -> str:
-        """Read a plain-text artifact."""
-        return self.get(name).path.read_text(encoding="utf-8")
 
 
 @dataclass(slots=True)

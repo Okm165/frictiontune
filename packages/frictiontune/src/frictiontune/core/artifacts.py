@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from frictiontune.core.errors import ArtifactError
-from frictiontune.core.hashing import content_hash, file_sha256
+from frictiontune.core.hashing import file_sha256
 from frictiontune.core.json import append_jsonl, dumps, iter_jsonl, try_loads, write_jsonl
 
 if TYPE_CHECKING:
@@ -93,11 +93,6 @@ class ArtifactStore:
     def directory(self) -> Path:
         """The run directory for this (pipeline, run_id)."""
         return self._root / self._pipeline / self._run_id
-
-    @property
-    def run_id(self) -> str:
-        """The run identifier."""
-        return self._run_id
 
     def ensure(self) -> None:
         """Create the run and data directories if absent."""
@@ -197,8 +192,3 @@ class ArtifactStore:
             if target.is_file():
                 return file_sha256(target)
         raise ArtifactError(f"cannot hash missing artifact: {name}")
-
-    @staticmethod
-    def config_fingerprint(config: Any) -> str:
-        """Hash a configuration object for the manifest."""
-        return content_hash(config)
