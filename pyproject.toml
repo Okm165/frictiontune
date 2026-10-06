@@ -75,9 +75,14 @@ warn_unused_ignores = true
 disallow_any_generics = true
 disallow_subclassing_any = true
 no_implicit_optional = true
+extra_checks = true
 show_error_codes = true
 plugins = ["pydantic.mypy"]
 mypy_path = "packages/frictiontune/src:packages/frictiontune-train/src"
+
+# Extra correctness codes beyond the `strict` bundle. `ignore-without-code`
+# forces every suppression to name the error it is suppressing.
+enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
 
 [[tool.mypy.overrides]]
 module = [

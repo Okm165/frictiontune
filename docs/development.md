@@ -71,9 +71,10 @@ settings:
 * `E501` is **not** ignored by hand; long lines are split. `ruff format` governs
   code line length and lint governs the rest.
 
-mypy runs in `strict` mode with the `pydantic.mypy` plugin. `pyarrow`, `textual`,
-and the torch stack ship no stubs and are covered by `ignore_missing_imports`
-overrides. `disallow_subclassing_any` is relaxed only for `frictiontune.tui.*`,
+mypy runs in `strict` mode with the `pydantic.mypy` plugin, plus `extra_checks`
+and the `redundant-expr` / `truthy-bool` / `ignore-without-code` error codes, so
+every suppression must name its error code. `pyarrow`, `textual`, and the torch
+stack ship no stubs and are covered by `ignore_missing_imports` overrides. `disallow_subclassing_any` is relaxed only for `frictiontune.tui.*`,
 where Textual's bases resolve to `Any`.
 
 ## Tests

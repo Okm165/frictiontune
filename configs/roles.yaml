@@ -11,7 +11,7 @@ llm:
   target:
     provider: openai_compatible
     base_url: ${FRICTIONTUNE_TARGET_BASE_URL:-http://localhost:8000/v1}
-    model: ${FRICTIONTUNE_TARGET_MODEL:-qwen3.8-flash-next}
+    model: ${FRICTIONTUNE_TARGET_MODEL:-your-target-model}
     api_key_env: FRICTIONTUNE_TARGET_API_KEY
     temperature: 0.0
     max_tokens: 4096
@@ -23,7 +23,7 @@ llm:
   adapter:
     provider: openai_compatible
     base_url: ${FRICTIONTUNE_ADAPTER_BASE_URL:-http://localhost:8001/v1}
-    model: ${FRICTIONTUNE_ADAPTER_MODEL:-qwen3.8-flash-next}
+    model: ${FRICTIONTUNE_ADAPTER_MODEL:-your-target-model}
     api_key_env: FRICTIONTUNE_ADAPTER_API_KEY
     temperature: 0.0
     max_tokens: 4096

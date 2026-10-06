@@ -1,4 +1,4 @@
-# Three 24 GB cards (the current target box: 3x RX 7900 XTX, PCIe-only).
+# Three 24 GB cards over PCIe: no NVLink assumed, so keep accumulation high.
 devices: 3
 quant: nf4
 offload: none
