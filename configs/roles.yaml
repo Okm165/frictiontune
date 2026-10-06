@@ -1,0 +1,157 @@
+# LLM role bindings. All roles speak the same OpenAI-compatible interface; only
+# the endpoint, model, temperature, and limits differ. Roles point at
+# environment variables so the same tree runs against different providers.
+#
+#   FRICTIONTUNE_LLM_BASE_URL     analyst/judge/etc. server
+#   FRICTIONTUNE_TARGET_BASE_URL  the model under evaluation (base)
+#   FRICTIONTUNE_ADAPTER_BASE_URL the tuned model endpoint (after training)
+#   FRICTIONTUNE_MODEL            default model for analyst-style roles
+llm:
+  # --- models under evaluation -------------------------------------------
+  target:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_TARGET_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_TARGET_MODEL:-qwen3.8-flash-next}
+    api_key_env: FRICTIONTUNE_TARGET_API_KEY
+    temperature: 0.0
+    max_tokens: 4096
+    concurrency: 2
+    cache: false
+    timeout_s: 300.0
+    response_format: text
+
+  adapter:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_ADAPTER_BASE_URL:-http://localhost:8001/v1}
+    model: ${FRICTIONTUNE_ADAPTER_MODEL:-qwen3.8-flash-next}
+    api_key_env: FRICTIONTUNE_ADAPTER_API_KEY
+    temperature: 0.0
+    max_tokens: 4096
+    concurrency: 2
+    cache: false
+    timeout_s: 300.0
+    response_format: text
+
+  # --- cheap routing and plumbing helpers --------------------------------
+  router:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 1024
+    concurrency: 8
+    response_format: json_object
+
+  compactor:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 4096
+    concurrency: 8
+    response_format: json_object
+
+  schema_inferer:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 2048
+    concurrency: 8
+    response_format: json_object
+
+  # --- the judgment roles ------------------------------------------------
+  friction_analyst:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    # non-zero temperature enables the configured ensemble (settings.ensemble)
+    temperature: 0.2
+    max_tokens: 8192
+    concurrency: 4
+    response_format: json_object
+
+  recovery_finder:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 8192
+    concurrency: 4
+    response_format: json_object
+
+  attributor:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 2048
+    concurrency: 4
+    response_format: json_object
+
+  rule_compiler:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 4096
+    concurrency: 4
+    response_format: json_object
+
+  rule_verifier:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 4096
+    concurrency: 4
+    response_format: json_object
+
+  judge:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 2048
+    concurrency: 4
+    response_format: json_object
+
+  dedup:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 1024
+    concurrency: 8
+    response_format: json_object
+
+  # --- generation roles --------------------------------------------------
+  teacher:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_TEACHER_MODEL:-gpt-4o}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.7
+    max_tokens: 8192
+    concurrency: 4
+    response_format: json_object
+
+  user_simulator:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_USER_SIM_MODEL:-gpt-4o}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.7
+    max_tokens: 1024
+    concurrency: 4
+    response_format: json_object

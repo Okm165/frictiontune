@@ -1,0 +1,11 @@
+# train_sft: QLoRA hyperparameters (delegated to frictiontune-train).
+output_name: adapter
+learning_rate: 0.0002
+epochs: 3.0
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+target_modules: []
+resume_from:
+max_steps: -1
+save_steps: 100

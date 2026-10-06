@@ -1,0 +1,3 @@
+# segment: cut sessions into episodes and episodes into plan/execute/verify phases.
+min_turns_for_phases: 4
+max_phase_transcript_chars: 60000

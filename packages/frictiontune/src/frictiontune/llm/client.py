@@ -1,0 +1,181 @@
+"""The single OpenAI-compatible LLM client.
+
+All model access in frictiontune goes through :class:`LlmClient`. It owns:
+
+* one ``AsyncOpenAI`` per ``(base_url, api_key)`` endpoint,
+* transport retries via the shared :func:`~frictiontune.core.retry.with_retry`,
+* content-hash caching so identical requests never pay twice,
+* per-role concurrency limiting.
+
+It performs **no** prompt construction and **no** schema repair; those live in
+:mod:`frictiontune.llm.prompts` and :mod:`frictiontune.llm.structured`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from typing import TYPE_CHECKING, Any
+
+from openai import AsyncOpenAI
+from pydantic import BaseModel, ConfigDict, Field
+
+from frictiontune.core.errors import LlmError
+from frictiontune.core.hashing import content_hash
+from frictiontune.core.logging import get_logger
+from frictiontune.core.retry import with_retry
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from frictiontune.config.models import LlmRoleConfig, RoleName
+    from frictiontune.core.cache import ContentCache
+    from frictiontune.llm.messages import ChatMessage, ToolSpec
+
+_log = get_logger(__name__)
+
+
+class TokenUsage(BaseModel):
+    """Token accounting returned by the provider."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class LlmResponse(BaseModel):
+    """A normalised chat-completion response."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    model: str
+    finish_reason: str | None = None
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    cached: bool = False
+
+
+def _api_key(config: LlmRoleConfig) -> str:
+    if config.api_key_env:
+        return os.environ.get(config.api_key_env, "EMPTY")
+    return "EMPTY"
+
+
+class LlmClient:
+    """Async, cached, concurrency-limited OpenAI-compatible client."""
+
+    def __init__(self, cache: ContentCache) -> None:
+        """Store the content cache used to deduplicate identical calls."""
+        self._cache = cache
+        self._sdk: dict[tuple[str, str], AsyncOpenAI] = {}
+        self._semaphores: dict[RoleName, asyncio.Semaphore] = {}
+
+    def _endpoint(self, config: LlmRoleConfig) -> AsyncOpenAI:
+        key = (config.base_url or "", _api_key(config))
+        client = self._sdk.get(key)
+        if client is None:
+            client = AsyncOpenAI(
+                base_url=config.base_url,
+                api_key=_api_key(config),
+                timeout=config.timeout_s,
+                max_retries=0,  # we own retries centrally
+            )
+            self._sdk[key] = client
+        return client
+
+    def _semaphore(self, role: RoleName, config: LlmRoleConfig) -> asyncio.Semaphore:
+        semaphore = self._semaphores.get(role)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(config.concurrency)
+            self._semaphores[role] = semaphore
+        return semaphore
+
+    def _cache_key(
+        self,
+        role: RoleName,
+        config: LlmRoleConfig,
+        messages: Sequence[ChatMessage],
+        tools: Sequence[ToolSpec] | None,
+    ) -> str:
+        return content_hash(
+            {
+                "role": role.value,
+                "provider": config.provider,
+                "base_url": config.base_url,
+                "model": config.model,
+                "temperature": config.temperature,
+                "max_tokens": config.max_tokens,
+                "response_format": config.response_format,
+                "messages": [message.to_openai() for message in messages],
+                "tools": [tool.to_openai() for tool in tools] if tools else None,
+            }
+        )
+
+    async def complete(
+        self,
+        role: RoleName,
+        config: LlmRoleConfig,
+        messages: Sequence[ChatMessage],
+        *,
+        tools: Sequence[ToolSpec] | None = None,
+        force_json: bool = False,
+    ) -> LlmResponse:
+        """Run one chat completion with caching and centralized retries."""
+        cache_key = self._cache_key(role, config, messages, tools)
+        if config.cache:
+            cached = self._cache.get(f"llm/{role.value}", cache_key)
+            if isinstance(cached, dict):
+                _log.debug("llm cache hit", role=role.value)
+                return LlmResponse.model_validate({**cached, "cached": True})
+
+        payload: dict[str, Any] = {
+            "model": config.model,
+            "messages": [message.to_openai() for message in messages],
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+        }
+        if tools:
+            payload["tools"] = [tool.to_openai() for tool in tools]
+        if force_json or config.response_format == "json_object":
+            payload["response_format"] = {"type": "json_object"}
+
+        async def _call() -> Any:
+            return await self._endpoint(config).chat.completions.create(**payload)
+
+        semaphore = self._semaphore(role, config)
+        try:
+            async with semaphore:
+                completion = await with_retry(
+                    _call,
+                    policy=config.retry,
+                    retry_on=(ConnectionError, TimeoutError, OSError),
+                    logger=_log,
+                )
+        except OSError as exc:
+            raise LlmError(f"{role.value}: transport failure: {exc}") from exc
+        except Exception as exc:  # provider SDK errors
+            raise LlmError(f"{role.value}: completion failed: {exc}") from exc
+
+        choice = completion.choices[0]
+        usage = getattr(completion, "usage", None)
+        response = LlmResponse(
+            text=choice.message.content or "",
+            model=completion.model,
+            finish_reason=choice.finish_reason,
+            usage=TokenUsage(
+                prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                total_tokens=getattr(usage, "total_tokens", 0) or 0,
+            ),
+        )
+        if config.cache:
+            self._cache.put(f"llm/{role.value}", cache_key, response.model_dump(mode="json"))
+        return response
+
+    async def aclose(self) -> None:
+        """Close every cached SDK client."""
+        for client in self._sdk.values():
+            await client.close()
+        self._sdk.clear()

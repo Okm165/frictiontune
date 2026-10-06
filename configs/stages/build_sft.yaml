@@ -1,0 +1,11 @@
+# build_sft: tokenize + mask judged examples. Tokenizer defaults to the base
+# model's; set FRICTIONTUNE_TOKENIZER (or this path) on the GPU box.
+tokenizer_path: ${FRICTIONTUNE_TOKENIZER:-}
+prefer_hf: true
+trust_remote_code: false
+include_reasoning_context: true
+# Whether reasoning tokens are trained too. Masking them is the conservative POC
+# default; the long-trajectory finding may argue for training them later.
+train_reasoning: false
+max_seq_len: 8192
+batch_size: 64

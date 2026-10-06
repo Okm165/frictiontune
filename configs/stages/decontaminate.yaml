@@ -1,0 +1,7 @@
+# decontaminate: time split + T1-T4 tiers (embeddings retrieve, judge decides).
+t1_overlap: 0.5
+retrieve_k: 5
+retrieval_floor: 0.6
+embed_batch: 64
+max_text_chars: 20000
+max_train_ngrams: 2000000

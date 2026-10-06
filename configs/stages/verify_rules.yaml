@@ -1,0 +1,8 @@
+# verify_rules: replay each rule against sampled friction/clean episodes.
+episodes_per_rule: 5
+clean_episodes_per_rule: 3
+pool_target: 12
+pool_clean: 8
+min_prevented: 1
+max_collateral: 0
+max_transcript_chars: 80000

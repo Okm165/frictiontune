@@ -1,0 +1,151 @@
+"""Typed request/response contracts for pluggable backends.
+
+Backends are the boundary between the language-agnostic pipeline and heavy,
+environment-specific machinery (training stacks, sandboxes, embedding servers).
+Everything crossing this boundary is a pydantic model.
+"""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from frictiontune.config.models import HardwareConfig
+
+
+class BackendModel(BaseModel):
+    """Common configuration for backend contracts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProbeExample(BackendModel):
+    """A single prompt/expected pair used for parity and capability checks."""
+
+    prompt: str
+    expected: str | None = None
+
+
+class TrainingRequest(BackendModel):
+    """Everything needed to run one supervised fine-tuning job."""
+
+    base_model: str
+    dataset_dir: str
+    output_dir: str
+    hardware: HardwareConfig
+    seed: int = 0
+    max_seq_len: int = 8192
+    learning_rate: float = 2e-4
+    epochs: float = 3.0
+    lora_r: int = 16
+    lora_alpha: int = 32
+    lora_dropout: float = 0.05
+    target_modules: list[str] = Field(
+        default_factory=lambda: [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ]
+    )
+    # MoE trap: an empty list prevents LoRA attaching to all experts.
+    target_parameters: list[str] = Field(default_factory=list)
+    resume_from: str | None = None
+    max_steps: int = -1
+    save_steps: int = 100
+    eval_dir: str | None = None
+
+
+class TrainingResult(BackendModel):
+    """Outcome of a fine-tuning job."""
+
+    adapter_dir: str
+    steps: int
+    train_loss: float
+    final_loss: float
+    wall_time_s: float
+    metrics: dict[str, float] = Field(default_factory=dict)
+    checkpoints: list[str] = Field(default_factory=list)
+
+
+class GrpoRequest(BackendModel):
+    """Everything needed to run a GRPO job against a reward function."""
+
+    base_model: str
+    adapter_dir: str | None = None
+    prompts_file: str
+    output_dir: str
+    hardware: HardwareConfig
+    seed: int = 0
+    learning_rate: float = 1e-5
+    max_steps: int = -1
+    group_size: int = 8
+    reward_weights: dict[str, float] = Field(
+        default_factory=lambda: {"judge": 1.0, "format": 0.5, "tool": 0.5}
+    )
+    max_new_tokens: int = 1_024
+
+
+class ExportRequest(BackendModel):
+    """Merge an adapter into its base or package a LoRA to serve."""
+
+    base_model: str
+    adapter_dir: str
+    output_dir: str
+    method: Literal["merge", "lora"] = "merge"
+    probe: list[ProbeExample] = Field(default_factory=list)
+
+
+class ParityResult(BackendModel):
+    """Agreement between two model endpoints on a probe set."""
+
+    total: int
+    matches: int
+    mismatches: list[str] = Field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        """Whether every probe matched exactly."""
+        return self.total > 0 and self.matches == self.total
+
+
+class ExportResult(BackendModel):
+    """Artifacts and parity outcome of an export."""
+
+    served_dir: str
+    merged: bool
+    parity: ParityResult
+
+
+class RolloutRequest(BackendModel):
+    """A single rollout of a model against a task under a tool sandbox."""
+
+    model: str
+    adapter_dir: str | None = None
+    task_prompt: str
+    max_turns: int = 30
+    sandbox: Literal["local", "container", "external"] = "local"
+    seed: int = 0
+
+
+class RolloutStep(BackendModel):
+    """One model turn within a rollout."""
+
+    turn: int
+    assistant_text: str
+    tool_name: str | None = None
+    tool_args: dict[str, str] = Field(default_factory=dict)
+    tool_result: str | None = None
+    tool_error: bool = False
+
+
+class RolloutResult(BackendModel):
+    """A completed rollout transcript and its terminal status."""
+
+    steps: list[RolloutStep]
+    finished: bool
+    outcome: str | None = None

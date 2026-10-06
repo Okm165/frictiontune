@@ -1,0 +1,5 @@
+# judge: rubric gate for mined/synthetic candidates (total is out of 25).
+accept_threshold: 20
+batch_size: 32
+max_context_chars: 60000
+max_completion_chars: 20000

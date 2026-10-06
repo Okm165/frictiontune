@@ -1,0 +1,6 @@
+# evaluate_replay: replay eval episodes against base and adapter endpoints.
+max_examples: 0
+max_context_chars: 60000
+max_generation_chars: 20000
+sampling_temperature: 0.0
+max_tokens: 1024

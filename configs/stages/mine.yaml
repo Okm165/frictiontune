@@ -1,0 +1,5 @@
+# mine: extract self-recovery and success-track completions from episodes.
+batch_size: 32
+max_transcript_chars: 100000
+min_completion_messages: 1
+min_confidence: 0.0

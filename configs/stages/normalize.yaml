@@ -1,0 +1,7 @@
+# normalize: compact large tool outputs, infer schemas, redact secrets/PII.
+compact_outputs: true
+compact_threshold_chars: 4000
+infer_schemas: true
+schema_examples_per_tool: 12
+redact: true
+batch_size: 64

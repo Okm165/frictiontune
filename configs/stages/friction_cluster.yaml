@@ -1,0 +1,2 @@
+# friction_cluster (extension): cluster friction events into behaviours.
+max_events: 400

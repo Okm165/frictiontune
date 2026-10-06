@@ -1,0 +1,46 @@
+# The friction taxonomy: SWE-chat axes (form/cause/cost/resolution) plus our
+# leaf labels. Every leaf maps to exactly one (form, cause) pair; friction_detect
+# rejects any event whose leaf disagrees with its axes, so the taxonomy is
+# self-consistent by construction.
+forms:
+  - project-reading
+  - intent-interpretation
+  - rule-following
+  - action-bounding
+  - implement/execute
+  - reporting
+
+causes:
+  - context
+  - capability
+  - instruction-ambiguity
+  - tool/env
+  - spec
+
+costs:
+  - effort
+  - trust
+  - irreversible
+
+resolutions:
+  - user-correction
+  - self-recovery
+  - none
+
+# leaf -> [form, cause]
+leaves:
+  instruction_misread: [intent-interpretation, instruction-ambiguity]
+  scope_creep: [action-bounding, instruction-ambiguity]
+  premature_action: [action-bounding, spec]
+  failure_to_ask: [intent-interpretation, instruction-ambiguity]
+  ignored_constraint: [rule-following, instruction-ambiguity]
+  tool_misuse: [implement/execute, tool/env]
+  repeated_failing_call: [implement/execute, capability]
+  no_verification: [implement/execute, capability]
+  wrong_verification: [reporting, capability]
+  context_rot: [project-reading, context]
+  repeated_mistake: [implement/execute, context]
+  format_violation: [reporting, spec]
+  verbosity: [reporting, spec]
+  unsafe_action: [action-bounding, spec]
+  stale_state: [project-reading, context]

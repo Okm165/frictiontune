@@ -1,0 +1,3 @@
+# raft_srft (extension): success-track examples from clean episodes.
+max_episodes: 500
+min_assistant_turns: 2

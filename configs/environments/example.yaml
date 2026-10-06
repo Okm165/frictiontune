@@ -1,0 +1,10 @@
+# Example environment overlay. Select it with `frictiontune run --environment example`.
+# Overlays are deep-merged last, so they are the right place for host-specific
+# endpoints without editing base.yaml or roles.yaml.
+embedding:
+  base_url: http://localhost:8000/v1
+
+# Override just one role for this environment:
+llm:
+  friction_analyst:
+    base_url: http://localhost:8000/v1

@@ -1,0 +1,113 @@
+[project]
+name = "frictiontune-workspace"
+version = "0.0.0"
+description = "uv workspace root for the frictiontune monorepo (not a package)."
+requires-python = ">=3.11"
+
+# The root is a *virtual* workspace: it is not installed as a package.
+# Real code lives in packages/*, each with its own pyproject.
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+# Workspace-wide developer tooling. `uv sync` installs this group by default, so
+# a plain sync keeps lint/type/test tools present instead of pruning them.
+[dependency-groups]
+dev = [
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "types-PyYAML>=6.0",
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "pre-commit>=3.7",
+]
+
+# ---------------------------------------------------------------------------
+# Shared tooling configuration for every workspace member.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W", "I", "N", "UP", "B", "A", "C4", "T20", "SIM", "RET",
+  "PTH", "RUF", "ANN", "TCH", "D",
+]
+ignore = [
+  "D100", "D104", "D203", "D213", "ANN401",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["ANN", "D", "S101"]
+"**/__init__.py" = ["F401"]
+"**/stages/_extensions.py" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# Pydantic resolves model annotations at runtime, and Typer reads command
+# signatures at runtime, so those imports must stay at module scope.
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = [
+  "pydantic.BaseModel",
+  "frictiontune.domain.trace.DomainModel",
+  "frictiontune.backends.models.BackendModel",
+  "frictiontune.pipeline.stage.StageSettings",
+  "frictiontune.config.models.BaseConfigModel",
+]
+runtime-evaluated-decorators = [
+  "pydantic.field_validator",
+  "pydantic.model_validator",
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+no_implicit_optional = true
+show_error_codes = true
+plugins = ["pydantic.mypy"]
+mypy_path = "packages/frictiontune/src:packages/frictiontune-train/src"
+
+[[tool.mypy.overrides]]
+module = [
+  "unsloth.*",
+  "bitsandbytes.*",
+  "duckdb.*",
+  "torch.*",
+  "transformers.*",
+  "datasets.*",
+  "peft.*",
+  "trl.*",
+  "pyarrow.*",
+  "textual.*",
+]
+ignore_missing_imports = true
+
+# Textual ships no stubs, so its base classes resolve to Any; subclassing Any is
+# expected here and confined to the optional UI module.
+[[tool.mypy.overrides]]
+module = ["frictiontune.tui.*"]
+disallow_subclassing_any = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-markers --strict-config"
+asyncio_mode = "auto"
+markers = [
+  "network: marks tests that would call an external LLM endpoint (skipped by default)",
+  "gpu: marks tests that require a GPU",
+]
+
+[tool.coverage.run]
+branch = true

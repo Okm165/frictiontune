@@ -1,0 +1,33 @@
+# Base configuration. Every machine- or model-specific value is a ${VAR}
+# reference, so the repo itself contains no host, path, or model id.
+project: frictiontune
+seed: 0
+
+paths:
+  artifacts_dir: artifacts
+  cache_dir: .cache/frictiontune
+  corpus_db: ${FRICTIONTUNE_CORPUS_DB:-}
+  base_weights_dir: ${FRICTIONTUNE_BASE_WEIGHTS:-}
+
+embedding:
+  provider: openai_compatible
+  base_url: ${FRICTIONTUNE_EMBED_BASE_URL:-http://localhost:8000/v1}
+  model: ${FRICTIONTUNE_EMBED_MODEL:-text-embedding-3-small}
+  api_key_env: FRICTIONTUNE_EMBED_API_KEY
+  dimensions:
+  cache: true
+  timeout_s: 60.0
+
+evaluation:
+  # Leading edge of the time split: everything strictly older trains, the rest
+  # evaluates. Never mix the two.
+  time_split_quantile: 0.8
+  enforce_time_split: true
+  t1_exact_ngram: true
+  t2_syntactic: true
+  t3_semantic: true
+  t4_task_level: true
+  ngram_size: 8
+  seeds: [0, 1, 2]
+  lucky_pass_flag: true
+  external_corpora: []

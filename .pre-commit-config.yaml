@@ -1,0 +1,46 @@
+# Pre-commit configuration. Install with: uv run pre-commit install
+# The hooks mirror `just check`: ruff lint, ruff format, and strict mypy.
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+        files: ^packages/
+      - id: ruff-format
+        files: ^packages/
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+        files: ^packages/.*\.py$
+        args:
+          - packages/frictiontune/src/frictiontune
+          - packages/frictiontune-train/src/frictiontune_train
+      - id: pytest-fast
+        name: pytest (fast)
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        files: ^packages/.*\.py$
+        stages: [pre-push]

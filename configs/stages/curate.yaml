@@ -1,0 +1,9 @@
+# curate: exact byte-hash dedup + agentic semantic dedup (embeddings retrieve,
+# the dedup agent decides).
+exact_dedup: true
+near_dedup: true
+retrieval_floor: 0.5
+retrieve_k: 5
+compare_window: 64
+embed_batch: 64
+max_text_chars: 20000

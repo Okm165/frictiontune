@@ -1,0 +1,6 @@
+# rollout (extension): send tasks to an external agent runner (ACP/HTTP).
+# Set FRICTIONTUNE_ROLLOUT_URL to enable; list real task prompts here.
+tasks: []
+max_turns: 30
+sandbox: local
+max_tasks: 20

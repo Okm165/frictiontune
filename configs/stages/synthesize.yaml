@@ -1,0 +1,4 @@
+# synthesize (extension): generate friction-avoiding examples per dimension.
+per_dimension: 8
+max_dimensions: 10
+seeds_per_dimension: 5

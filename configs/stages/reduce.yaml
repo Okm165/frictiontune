@@ -1,0 +1,4 @@
+# reduce (extension): map-reduce compression of long episodes.
+min_chars: 40000
+chunk_turns: 40
+batch_size: 16

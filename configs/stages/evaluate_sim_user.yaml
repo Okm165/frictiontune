@@ -1,0 +1,5 @@
+# evaluate_sim_user (extension): drive a simulated user against both models.
+goals: []
+persona: a pragmatic senior engineer who wants the task done correctly
+max_turns: 12
+max_generation_chars: 20000

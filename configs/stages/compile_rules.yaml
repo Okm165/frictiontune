@@ -1,0 +1,4 @@
+# compile_rules: turn friction profiles into runtime rules.
+batch_size: 32
+max_transcript_chars: 100000
+max_rules_per_episode: 8

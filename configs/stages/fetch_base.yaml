@@ -1,0 +1,4 @@
+# fetch_base: locate/download the base model and probe trainability.
+repo_id: ${FRICTIONTUNE_BASE_REPO:-}
+allow_download: false
+trust_remote_code: false

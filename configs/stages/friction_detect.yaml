@@ -1,0 +1,6 @@
+# friction_detect: route then analyse; ensemble>1 needs a non-zero analyst temp.
+router_enabled: true
+ensemble: 2
+batch_size: 32
+max_transcript_chars: 100000
+taxonomy_enforcement: true
