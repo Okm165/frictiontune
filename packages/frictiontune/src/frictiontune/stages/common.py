@@ -55,6 +55,44 @@ def render_turns(messages: Sequence[Message], indices: Sequence[int]) -> str:
     return "\n".join(selected)
 
 
+def analyst_prompt_values(
+    config: RunConfig,
+    *,
+    session_id: str,
+    episode_id: str,
+    turn_count: int,
+    tool_calls: int,
+    tool_errors: int,
+    compactions: int,
+    transcript: str,
+    max_chars: int,
+) -> dict[str, object]:
+    """Build the ``friction_analyst`` prompt values from episode metadata.
+
+    The single source of truth for the analyst's variables, shared by the
+    ``friction_detect`` stage and the golden-episode evaluation harness so the
+    two cannot drift.
+    """
+    taxonomy = config.taxonomy
+    return {
+        "session_id": session_id,
+        "episode_id": episode_id,
+        "turn_count": turn_count,
+        "tool_calls": tool_calls,
+        "tool_errors": tool_errors,
+        "compactions": compactions,
+        "transcript": clip(transcript, max_chars),
+        "forms": ", ".join(taxonomy.forms),
+        "causes": ", ".join(taxonomy.causes),
+        "costs": ", ".join(taxonomy.costs),
+        "resolutions": ", ".join(taxonomy.resolutions),
+        "leaf_axes": "\n".join(
+            f"- {leaf}: form={form}, cause={cause}"
+            for leaf, (form, cause) in sorted(taxonomy.leaves.items())
+        ),
+    }
+
+
 async def bounded_gather(
     factory: Callable[[T], Awaitable[object]],
     items: Sequence[T],

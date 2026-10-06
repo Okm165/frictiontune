@@ -94,6 +94,23 @@ They are marked so you can skip the slow or environment-dependent ones:
 
 Tests must not require a live LLM or a GPU to pass.
 
+### Measuring prompt quality
+
+Prompt changes should be justified by a number, not a feeling. The golden-episode
+harness scores the friction analyst against hand-labelled episodes and reports
+precision/recall/F1, exact-episode match, and form/cause accuracy:
+
+```bash
+uv run frictiontune eval-prompts --hardware 3x24g
+```
+
+The fixture lives at
+`packages/frictiontune/src/frictiontune/evaluation/fixtures/golden_episodes.jsonl`
+(one JSON object per line: `id`, `transcript`, `expected` leaves). Its labels must
+match `configs/friction_taxonomy.yaml`, which `tests/test_evaluation.py` enforces.
+The scoring maths is pure and unit-tested offline; only the command needs an
+endpoint. Grow the fixture whenever a real failure is found.
+
 ## Adding a stage
 
 1. Create `packages/frictiontune/src/frictiontune/stages/<name>.py`.

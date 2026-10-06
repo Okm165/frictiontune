@@ -25,6 +25,7 @@ from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 from frictiontune.reporting.report import render_friction_report
 from frictiontune.stages.common import (
+    analyst_prompt_values,
     bounded_gather,
     clip,
     render_transcript,
@@ -142,23 +143,17 @@ class FrictionDetect(Stage):
     ) -> tuple[list[FrictionEventDraft], bool]:
         """Run the analyst (with optional ensemble) and return drafts + abstain."""
         role = ctx.config.role(RoleName.FRICTION_ANALYST)
-        values = {
-            "session_id": episode.session_id,
-            "episode_id": episode.id,
-            "turn_count": len(episode.assistant_turns()),
-            "tool_calls": episode.features.tool_calls,
-            "tool_errors": episode.features.tool_errors,
-            "compactions": episode.features.compactions,
-            "transcript": clip(render_transcript(episode.messages), settings.max_transcript_chars),
-            "forms": ", ".join(ctx.config.taxonomy.forms),
-            "causes": ", ".join(ctx.config.taxonomy.causes),
-            "costs": ", ".join(ctx.config.taxonomy.costs),
-            "resolutions": ", ".join(ctx.config.taxonomy.resolutions),
-            "leaf_axes": "\n".join(
-                f"- {leaf}: form={form}, cause={cause}"
-                for leaf, (form, cause) in sorted(ctx.config.taxonomy.leaves.items())
-            ),
-        }
+        values = analyst_prompt_values(
+            ctx.config,
+            session_id=episode.session_id,
+            episode_id=episode.id,
+            turn_count=len(episode.assistant_turns()),
+            tool_calls=episode.features.tool_calls,
+            tool_errors=episode.features.tool_errors,
+            compactions=episode.features.compactions,
+            transcript=render_transcript(episode.messages),
+            max_chars=settings.max_transcript_chars,
+        )
 
         passes = settings.ensemble if role.temperature > 0.0 else 1
         if passes <= 1:

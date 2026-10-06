@@ -15,7 +15,9 @@ import re
 from pathlib import Path
 
 import frictiontune
+from frictiontune.config.loader import load_config
 from frictiontune.llm.prompts.registry import default_registry
+from frictiontune.stages.common import analyst_prompt_values
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
@@ -115,5 +117,27 @@ def test_call_sites_supply_exactly_their_prompt_variables() -> None:
             assert not keys - needed, f"{where} passes unused variables {sorted(keys - needed)}"
             checked += 1
 
-    # Every structured call site in the package should be statically checkable.
-    assert checked >= 20
+    # Every structured call site that builds its values inline is checked here.
+    # Call sites that delegate to a shared value-builder (the analyst) are
+    # covered by test_analyst_values_match_the_analyst_prompt.
+    assert checked >= 19
+
+
+def test_analyst_values_match_the_analyst_prompt(config_dir: Path) -> None:
+    template = default_registry().get("friction_analyst")
+    needed = set(_PLACEHOLDER.findall(template.system))
+    needed |= set(_PLACEHOLDER.findall(template.user))
+
+    values = analyst_prompt_values(
+        load_config(config_dir),
+        session_id="s",
+        episode_id="e",
+        turn_count=1,
+        tool_calls=0,
+        tool_errors=0,
+        compactions=0,
+        transcript="0 | user | hi",
+        max_chars=1000,
+    )
+
+    assert set(values) == needed

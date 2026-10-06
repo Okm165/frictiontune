@@ -94,6 +94,9 @@ uv run frictiontune run --hardware 3x24g
 uv run frictiontune inspect
 uv run frictiontune report
 uv run frictiontune dashboard
+
+# Measure the friction analyst against the golden episodes (calls an LLM).
+uv run frictiontune eval-prompts --hardware 3x24g
 ```
 
 ## Documentation

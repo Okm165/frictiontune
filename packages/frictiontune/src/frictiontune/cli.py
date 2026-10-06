@@ -19,6 +19,7 @@ from rich.table import Table
 from frictiontune.application import Application
 from frictiontune.config.loader import load_config, parse_set_overrides
 from frictiontune.core.errors import FrictionTuneError
+from frictiontune.evaluation import GoldenReport, evaluate_golden, load_bundled_golden, load_golden
 from frictiontune.pipeline.dag import full_graph
 from frictiontune.pipeline.manifest import RunManifest, read_run_manifest
 from frictiontune.pipeline.orchestrator import Orchestrator
@@ -307,6 +308,43 @@ def dashboard(
             )
             return
     raise _fail("no dashboard artifact found; run the evaluate_replay stage first")
+
+
+@app.command()
+def eval_prompts(
+    config_dir: Path = typer.Option(_DEFAULT_CONFIG_DIR, "--config-dir", help="Config directory."),
+    hardware: str | None = typer.Option(None, "--hardware", help="Hardware preset name."),
+    environment: str | None = typer.Option(None, "--environment", help="Environment overlay name."),
+    set_: list[str] = typer.Option([], "--set", "-s", help="Override a config key: a.b=c."),
+    fixture: Path | None = typer.Option(
+        None, "--fixture", help="Golden JSONL path (defaults to the bundled set)."
+    ),
+) -> None:
+    """Score the friction analyst on the golden episodes (calls an LLM endpoint)."""
+    try:
+        config = _load(config_dir, hardware=hardware, environment=environment, overrides=set_)
+    except FrictionTuneError as exc:
+        raise _fail(str(exc)) from exc
+
+    episodes = load_golden(fixture) if fixture is not None else load_bundled_golden()
+    if not episodes:
+        raise _fail("the golden fixture is empty")
+    try:
+        application = Application.build(config)
+    except FrictionTuneError as exc:
+        raise _fail(str(exc)) from exc
+
+    async def _score() -> GoldenReport:
+        try:
+            return await evaluate_golden(application.gateway, config, episodes)
+        finally:
+            await application.aclose()
+
+    try:
+        report = asyncio.run(_score())
+    except FrictionTuneError as exc:
+        raise _fail(str(exc)) from exc
+    console.print(report.summary())
 
 
 @app.command()
