@@ -168,3 +168,19 @@ def test_analyst_worked_example_axes_match_the_taxonomy(config_dir: Path) -> Non
     assert (match["form"], match["cause"]) == taxonomy.leaves[leaf]
     assert match["cost"] in taxonomy.costs
     assert match["resolution"] in taxonomy.resolutions
+
+
+_RESOLUTION_BULLET = re.compile(r"^- (?P<name>[a-z][\w-]*): ", re.MULTILINE)
+
+
+def test_analyst_resolution_glossary_matches_the_taxonomy(config_dir: Path) -> None:
+    """The resolution glossary must name exactly the configured resolutions.
+
+    The prompt also injects ``{{resolutions}}``; if the glossary enumerated a
+    different set, the two would disagree about which values are legal.
+    """
+    taxonomy = load_config(config_dir).taxonomy
+    text = default_registry().get("friction_analyst").system
+    glossary = text.split("## Resolution", 1)[1].split("##", 1)[0]
+
+    assert set(_RESOLUTION_BULLET.findall(glossary)) == set(taxonomy.resolutions)
