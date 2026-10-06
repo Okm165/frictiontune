@@ -20,6 +20,7 @@ from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, Ta
 from frictiontune.application import Application
 from frictiontune.config.loader import load_config
 from frictiontune.core.errors import FrictionTuneError
+from frictiontune.reporting.report import human_size
 
 _DEFAULT_CONFIG_DIR = Path("configs")
 
@@ -113,19 +114,10 @@ class PipelineView(App[None]):
                                     stage_dir.name,
                                     run_dir.name[:12],
                                     str(item.relative_to(run_dir)),
-                                    _human_size(item.stat().st_size),
+                                    human_size(item.stat().st_size),
                                 )
                                 count += 1
         status.update(f"{len(application.stages.all())} stages · {count} artifacts under {root}")
-
-
-def _human_size(size: int) -> str:
-    value = float(size)
-    for unit in ("B", "KB", "MB", "GB"):
-        if value < 1024 or unit == "GB":
-            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
-        value /= 1024
-    return f"{value:.1f}GB"
 
 
 def run_tui(config_dir: Path = _DEFAULT_CONFIG_DIR) -> None:

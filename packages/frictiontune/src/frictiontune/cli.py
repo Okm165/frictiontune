@@ -24,7 +24,7 @@ from frictiontune.pipeline.dag import full_graph
 from frictiontune.pipeline.manifest import RunManifest, read_run_manifest
 from frictiontune.pipeline.orchestrator import Orchestrator
 from frictiontune.reporting.dashboard import ReplayDashboard
-from frictiontune.reporting.report import render_dashboard, render_run_report
+from frictiontune.reporting.report import human_size, render_dashboard, render_run_report
 from frictiontune.version import __version__
 
 if TYPE_CHECKING:
@@ -267,7 +267,7 @@ def inspect(
                         stage_dir.name,
                         run_dir.name[:12],
                         str(item.relative_to(run_dir)),
-                        _human_size(item.stat().st_size),
+                        human_size(item.stat().st_size),
                     )
     console.print(table)
 
@@ -386,15 +386,6 @@ def _as_log_format(value: str) -> LogFormat:
     if log_format is None:
         raise _fail(f"unknown log format {value!r}; expected console or json")
     return log_format
-
-
-def _human_size(size: int) -> str:
-    value = float(size)
-    for unit in ("B", "KB", "MB", "GB"):
-        if value < 1024 or unit == "GB":
-            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
-        value /= 1024
-    return f"{value:.1f}GB"
 
 
 if __name__ == "__main__":  # pragma: no cover - console-script fallback

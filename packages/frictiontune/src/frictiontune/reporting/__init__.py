@@ -9,6 +9,7 @@ from frictiontune.reporting.dashboard import (
     relative_drop,
 )
 from frictiontune.reporting.report import (
+    human_size,
     render_dashboard,
     render_friction_report,
     render_run_report,
@@ -19,6 +20,7 @@ __all__ = [
     "ReplayDashboard",
     "Signal",
     "build_dashboard",
+    "human_size",
     "make_signal",
     "relative_drop",
     "render_dashboard",

@@ -31,6 +31,16 @@ def _counter_table(title: str, counts: dict[str, int]) -> str:
     return f"### {title}\n\n" + _table(["key", "count"], rows) + "\n"
 
 
+def human_size(size: int) -> str:
+    """Format a byte count in human-readable units."""
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+        value /= 1024
+    return f"{value:.1f}GB"
+
+
 def render_run_report(manifest: RunManifest) -> str:
     """Render a run manifest as a markdown report."""
     lines: list[str] = [
