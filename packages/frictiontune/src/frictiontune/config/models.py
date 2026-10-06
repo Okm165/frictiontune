@@ -55,7 +55,6 @@ class LlmRoleConfig(BaseConfigModel):
     cache: bool = True
     timeout_s: float = Field(default=120.0, gt=0.0)
     response_format: Literal["json_object", "json_schema", "text"] = "json_object"
-    prompt_ref: str | None = None
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
 
 
@@ -115,7 +114,6 @@ class EvaluationConfig(BaseConfigModel):
     """Contamination and evaluation policy."""
 
     time_split_quantile: float = Field(default=0.8, gt=0.0, lt=1.0)
-    enforce_time_split: bool = True
     t1_exact_ngram: bool = True
     t2_syntactic: bool = True
     t3_semantic: bool = True

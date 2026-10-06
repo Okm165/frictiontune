@@ -22,7 +22,6 @@ evaluation:
   # Leading edge of the time split: everything strictly older trains, the rest
   # evaluates. Never mix the two.
   time_split_quantile: 0.8
-  enforce_time_split: true
   t1_exact_ngram: true
   t2_syntactic: true
   t3_semantic: true

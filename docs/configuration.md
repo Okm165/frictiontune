@@ -81,7 +81,7 @@ the same tree runs against different providers.
 
 An `LlmRoleConfig` has: `provider`, `base_url`, `model`, `api_key_env`,
 `temperature`, `max_tokens`, `concurrency`, `cache`, `timeout_s`,
-`response_format`, `prompt_ref`, and a `retry` policy. `cache: false` is used for
+`response_format`, and a `retry` policy. `cache: false` is used for
 `target`/`adapter` because replay must not serve cached generations.
 
 `response_format` is `text`, `json_object`, or `json_schema`. Structured calls
@@ -134,8 +134,8 @@ declared form/cause, so the taxonomy is self-consistent by construction.
 
 `EvaluationConfig` controls the trustworthiness of the headline number:
 
-* `time_split_quantile` — where the strict time split falls (default `0.8`).
-* `enforce_time_split` — must be true for a trustworthy replay.
+* `time_split_quantile` — where the strict time split falls (default `0.8`); the
+  split is always enforced, so training never sees evaluation-time data.
 * `t1_exact_ngram` … `t4_task_level` — which contamination tiers run.
 * `ngram_size` — T1 window size.
 * `seeds` — bootstrap seeds for the dashboard intervals.
