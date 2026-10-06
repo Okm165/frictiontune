@@ -141,11 +141,12 @@ LlmClient          # transport: async, cached by content hash, transport-retried
 * **Retry is defined once.** `frictiontune.core.retry.with_retry` is the single
   retry primitive, and `frictiontune.llm.transport.TRANSPORT_RETRYABLE` is the
   single set of retryable transport errors — OS-level failures plus the OpenAI
-  SDK's connection/timeout, rate-limit, and 5xx errors, which are not `OSError`
-  subclasses and would otherwise never be retried. The chat client and the
-  embedding backend both use them, and the gateway reuses the primitive for
-  schema repair; a test asserts `tenacity` is imported only by `core/retry.py`.
-  There is no second, ad-hoc retry definition anywhere.
+  SDK's connection/timeout, rate-limit, and 5xx errors and raw `httpx` transport
+  errors, none of which are `OSError` subclasses and would otherwise never be
+  retried. The chat client, embedding backend, agent rollout, and base-weight
+  download all use it, and the gateway reuses the primitive for schema repair; a
+  test asserts `tenacity` is imported only by `core/retry.py`. There is no
+  second, ad-hoc retry definition anywhere.
 
 Roles (`frictiontune.config.models.RoleName`) are typed names — `router`,
 `compactor`, `friction_analyst`, `judge`, `teacher`, `target`, `adapter`, … Each

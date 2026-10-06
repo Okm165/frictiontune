@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
+import httpx
 import pytest
 from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.cache import ContentCache
@@ -75,7 +76,14 @@ def test_json_schema_role_degrades_without_a_schema() -> None:
 
 
 @pytest.mark.parametrize(
-    "exc", [APIConnectionError, APITimeoutError, RateLimitError, InternalServerError]
+    "exc",
+    [
+        APIConnectionError,
+        APITimeoutError,
+        RateLimitError,
+        InternalServerError,
+        httpx.TransportError,
+    ],
 )
 def test_transport_retryable_includes_provider_transient_errors(
     exc: type[BaseException],

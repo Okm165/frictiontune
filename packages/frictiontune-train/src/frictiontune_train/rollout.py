@@ -39,15 +39,23 @@ class HttpRolloutBackend:
                 "set FRICTIONTUNE_ROLLOUT_URL to an agent runner (ACP/HTTP) endpoint",
             )
         import httpx
+        from frictiontune.core.retry import RetryPolicy, with_retry
+        from frictiontune.llm.transport import TRANSPORT_RETRYABLE
 
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        url = self._url
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                self._url,
-                json=request.model_dump(mode="json"),
-                headers=headers,
-            )
-            response.raise_for_status()
+
+            async def _post() -> httpx.Response:
+                response = await client.post(
+                    url,
+                    json=request.model_dump(mode="json"),
+                    headers=headers,
+                )
+                response.raise_for_status()
+                return response
+
+            response = await with_retry(_post, policy=RetryPolicy(), retry_on=TRANSPORT_RETRYABLE)
             payload = response.json()
         return self._parse(payload)
 

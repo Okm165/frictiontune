@@ -8,12 +8,16 @@ time are spent.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from frictiontune.core.errors import StageError
+from frictiontune.core.logging import get_logger
+from frictiontune.core.retry import RetryPolicy, with_retry
 from frictiontune.domain.base import BaseProbe
+from frictiontune.llm.transport import TRANSPORT_RETRYABLE
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 
@@ -21,6 +25,8 @@ if TYPE_CHECKING:
     from typing import Any
 
     from frictiontune.pipeline.context import StageContext
+
+_log = get_logger(__name__)
 
 _DEFAULT_TARGET_MODULES = [
     "q_proj",
@@ -153,9 +159,15 @@ class FetchBase(Stage):
                 ) from exc
             target.mkdir(parents=True, exist_ok=True)
             ctx.logger.info("downloading base weights", repo_id=settings.repo_id)
-            snapshot_download(
-                repo_id=settings.repo_id,
-                local_dir=str(target),
+            await with_retry(
+                lambda: asyncio.to_thread(
+                    snapshot_download,
+                    repo_id=settings.repo_id,
+                    local_dir=str(target),
+                ),
+                policy=RetryPolicy(max_attempts=3),
+                retry_on=TRANSPORT_RETRYABLE,
+                logger=_log,
             )
 
         probe = probe_base(target, settings.repo_id)
