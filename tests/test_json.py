@@ -34,6 +34,21 @@ def test_extract_json_object_ignores_leading_prose() -> None:
     assert extract_json_object(text) == {"leaf": "no_verification", "severity": 3}
 
 
+def test_extract_json_object_skips_braces_in_leading_prose() -> None:
+    text = 'The set {x} is not JSON. Result:\n{"leaf": "tool_misuse", "n": 1}'
+    assert extract_json_object(text) == {"leaf": "tool_misuse", "n": 1}
+
+
+def test_extract_json_object_ignores_trailing_prose_with_braces() -> None:
+    text = '{"ok": true} Note the placeholder {x} in the template.'
+    assert extract_json_object(text) == {"ok": True}
+
+
+def test_extract_json_object_recovers_after_a_malformed_object() -> None:
+    text = '{not valid json} {"leaf": "verbosity"}'
+    assert extract_json_object(text) == {"leaf": "verbosity"}
+
+
 def test_extract_json_object_returns_none_without_object() -> None:
     assert extract_json_object("no json here") is None
     assert extract_json_object("[1, 2, 3]") is None
