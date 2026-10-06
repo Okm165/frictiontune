@@ -1,7 +1,7 @@
 """``ingest`` — read the source corpus into canonical, streamed messages.
 
 Read-only and immutable: a live agent session is never disturbed. The whole
-corpus is streamed session-by-session into Parquet through a generator, so the
+corpus is streamed session-by-session into JSONL through a generator, so the
 process never holds more than one session in memory.
 """
 

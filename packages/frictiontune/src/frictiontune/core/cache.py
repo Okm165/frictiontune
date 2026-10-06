@@ -53,16 +53,3 @@ class ContentCache:
         path = self._path(namespace, key)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(dumps(value), encoding="utf-8")
-
-    def get_or_compute(self, namespace: str, payload: Any, compute: Any) -> Any:
-        """Return a cached value, otherwise compute, store, and return it.
-
-        ``compute`` is a zero-argument callable evaluated only on a miss.
-        """
-        key = self.key(payload)
-        cached = self.get(namespace, key)
-        if cached is not None:
-            return cached
-        value = compute()
-        self.put(namespace, key, value)
-        return value

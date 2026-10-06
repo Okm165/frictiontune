@@ -72,10 +72,6 @@ class RunManifest(BaseModel):
     finished_at: str
     stages: list[StageManifest] = Field(default_factory=list)
 
-    def stage_names(self) -> list[str]:
-        """The names of the stages that ran."""
-        return [entry.stage for entry in self.stages]
-
 
 def write_stage_manifest(path: Path, manifest: StageManifest) -> None:
     """Write a stage manifest as pretty JSON."""

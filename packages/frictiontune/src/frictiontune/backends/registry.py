@@ -85,18 +85,6 @@ class BackendRegistry:
             )
         return self._rollout
 
-    def has_training(self) -> bool:
-        """Whether a training backend is registered."""
-        return self._training is not None
-
-    def has_serving(self) -> bool:
-        """Whether a serving backend is registered."""
-        return self._serving is not None
-
-    def has_rollout(self) -> bool:
-        """Whether a rollout backend is registered."""
-        return self._rollout is not None
-
     def embedder_or_none(self) -> Embedder | None:
         """Return the embedding backend if one is registered, else ``None``."""
         return self._embedder

@@ -104,7 +104,7 @@ uv run frictiontune inspect --stage friction_detect
 uv run frictiontune report             # markdown summary of the run
 ```
 
-Open any JSONL or Parquet file to see what a stage produced. The whole point is
+Open any JSONL or Markdown file to see what a stage produced. The whole point is
 that there is no black box: the friction events, the rules, the judged examples,
 and the contamination report are all plain files.
 

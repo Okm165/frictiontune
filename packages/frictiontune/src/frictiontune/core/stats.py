@@ -22,17 +22,6 @@ def mean(values: Sequence[float]) -> float:
     return sum(values) / len(values)
 
 
-def median(values: Sequence[float]) -> float:
-    """Median of the values (0.0 for an empty sequence)."""
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    middle = len(ordered) // 2
-    if len(ordered) % 2 == 1:
-        return ordered[middle]
-    return (ordered[middle - 1] + ordered[middle]) / 2.0
-
-
 def percentile(values: Sequence[float], quantile: float) -> float:
     """Linear-interpolated percentile (``quantile`` in ``[0, 1]``)."""
     if not values:
@@ -69,13 +58,6 @@ def bootstrap_ci(
         means.append(sum(sample) / size)
     tail = (1.0 - confidence) / 2.0
     return (percentile(means, tail), percentile(means, 1.0 - tail))
-
-
-def paired_delta(baseline: Sequence[float], tuned: Sequence[float]) -> list[float]:
-    """Element-wise ``tuned - baseline`` for paired observations."""
-    if len(baseline) != len(tuned):
-        raise ValueError("paired_delta requires equal-length sequences")
-    return [t - b for b, t in zip(baseline, tuned, strict=True)]
 
 
 def cosine(left: Sequence[float], right: Sequence[float]) -> float:

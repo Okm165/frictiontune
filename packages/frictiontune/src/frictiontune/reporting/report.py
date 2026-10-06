@@ -1,8 +1,8 @@
 """Human-readable reports rendered from pipeline artifacts.
 
 Reports are the explorable surface of the pipeline: every stage can render a
-markdown summary that a developer reads without opening Parquet. Rendering is
-pure and side-effect free; stages decide where to write the result.
+markdown summary a developer reads without opening the raw artifacts. Rendering
+is pure and side-effect free; stages decide where to write the result.
 """
 
 from __future__ import annotations

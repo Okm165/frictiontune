@@ -14,11 +14,6 @@ def session_id(raw: str) -> str:
     return raw
 
 
-def message_id(session: str, seq: int) -> str:
-    """Return a stable message id within a session."""
-    return f"{session}#{seq}"
-
-
 def episode_id(session: str, start_message_id: str) -> str:
     """Return a stable episode id anchored at the opening user message."""
     return f"{session}:{start_message_id}"

@@ -75,10 +75,9 @@ whole pipeline explorable: every intermediate is on disk.
 | Helper | Writes | Typical use |
 | --- | --- | --- |
 | `ctx.emit_jsonl(name, ...)` | JSONL | Nested, heterogeneous records (messages, events, examples) |
-| `ctx.emit_parquet(name, ...)` | Parquet | Flat/aggregate tables |
 | `ctx.emit_json(name, obj)` | JSON | One structured object (a report, a probe) |
 | `ctx.emit_text(name, text)` | Markdown | Human-readable report |
-| `ctx.parquet_sink` / `ctx.jsonl_sink` | streaming | Never hold the corpus in memory |
+| `ctx.jsonl_sink` | streaming | Never hold the corpus in memory |
 
 `emit_*` writes the file, **publishes** it to the catalog under its logical name,
 and records it on the result. Sinks stream to disk so a multi-gigabyte corpus is

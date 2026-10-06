@@ -66,11 +66,6 @@ class DependencyGraph:
             target for targets in self._edges.values() for target in targets
         }
 
-    @property
-    def nodes(self) -> frozenset[str]:
-        """Every node in the graph."""
-        return frozenset(self._nodes)
-
     def edges(self) -> Mapping[str, tuple[str, ...]]:
         """The adjacency map."""
         return self._edges

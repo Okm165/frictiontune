@@ -99,17 +99,6 @@ class RuleLibrary(DomainModel):
     rules: list[RuntimeRule] = Field(default_factory=list)
     generated_from: str = ""
 
-    def active(self) -> list[RuntimeRule]:
-        """Return only rules that are active."""
-        return [rule for rule in self.rules if rule.status is RuleStatus.ACTIVE]
-
-    def by_id(self, rule_id: str) -> RuntimeRule | None:
-        """Look up a rule by id."""
-        for rule in self.rules:
-            if rule.id == rule_id:
-                return rule
-        return None
-
 
 # Resolve the forward reference used above.
 RuntimeRule.model_rebuild()

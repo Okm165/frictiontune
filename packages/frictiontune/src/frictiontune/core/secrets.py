@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Sequence
 
 _REDACTED = "[REDACTED:{kind}]"
 
@@ -55,7 +55,6 @@ def detect_candidates(text: str) -> list[SecretCandidate]:
     spans: list[tuple[int, int, str]] = []
     for kind, pattern in _PATTERNS:
         for match in pattern.finditer(text):
-            match.group(1) if match.groups() else match.group(0)
             start = match.start(1) if match.groups() else match.start(0)
             end = match.end(1) if match.groups() else match.end(0)
             spans.append((start, end, kind))
@@ -93,8 +92,3 @@ def apply_redactions(text: str, spans: Sequence[tuple[int, int, str]]) -> str:
     for start, end, kind in sorted(spans, key=lambda span: span[0], reverse=True):
         result = result[:start] + _REDACTED.format(kind=kind) + result[end:]
     return result
-
-
-def total_candidates(texts: Iterable[str]) -> int:
-    """Count candidates across several texts (used for reporting)."""
-    return sum(len(detect_candidates(text)) for text in texts)

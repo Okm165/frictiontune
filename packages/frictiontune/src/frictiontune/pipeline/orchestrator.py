@@ -39,7 +39,6 @@ if TYPE_CHECKING:
 def _kind_for(ref: DatasetRef) -> str:
     suffix = Path(ref.path).suffix
     return {
-        ".parquet": "parquet",
         ".jsonl": "jsonl",
         ".json": "json",
         ".md": "text",

@@ -7,8 +7,8 @@ mechanics that make it work.
 Two conventions throughout:
 
 * **Artifact names are logical and extensionless** (`friction_events`, `rules`).
-  The store adds the suffix (`.jsonl`, `.json`, `.parquet`). Read them with
-  `ctx.catalog.stream(name, Model)` or `ctx.catalog.read_frame(name)`.
+  The store adds the suffix (`.jsonl`, `.json`, `.md`). Read them with
+  `ctx.catalog.stream(name, Model)` or `ctx.catalog.read_json(name)`.
 * **Deterministic vs judged.** Steps marked *plumbing* are pure code; steps
   marked *judged* are LLM/agent calls returning strict schemas.
 

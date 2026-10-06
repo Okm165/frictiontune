@@ -27,11 +27,6 @@ def content_hash(value: Any) -> str:
     return hashlib.sha256(dumps(value).encode("utf-8")).hexdigest()
 
 
-def text_hash(text: str) -> str:
-    """Return the SHA-256 hex digest of UTF-8 ``text`` (exact byte identity)."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def file_sha256(path: Path, *, chunk_size: int = 1 << 20) -> str:
     """Hash a file in a streaming fashion so large artifacts never enter RAM."""
     digest = hashlib.sha256()

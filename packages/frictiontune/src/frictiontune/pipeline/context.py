@@ -10,18 +10,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
-import polars as pl
-import pyarrow.parquet as pq
 from pydantic import BaseModel
 
-from frictiontune.core.artifacts import ArtifactStore, DatasetRef, JsonlSink, ParquetSink
+from frictiontune.core.artifacts import ArtifactStore, DatasetRef, JsonlSink
 from frictiontune.core.errors import ValidationError as FtValidationError
 from frictiontune.core.json import iter_jsonl, try_loads
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Sequence
 
     import structlog
 
@@ -39,7 +37,7 @@ class CatalogEntry:
 
     ref: DatasetRef
     path: Path
-    kind: str  # parquet | jsonl | json | text
+    kind: str  # jsonl | json | text
 
 
 class ArtifactCatalog:
@@ -77,36 +75,18 @@ class ArtifactCatalog:
 
     # -- typed readers -----------------------------------------------------
 
-    def read_frame(self, name: str) -> pl.DataFrame:
-        """Read an artifact as a Polars frame (Parquet or NDJSON)."""
-        entry = self.get(name)
-        if entry.kind == "jsonl":
-            return pl.read_ndjson(entry.path)
-        return pl.read_parquet(entry.path)
-
     def stream(
         self, name: str, model: type[ModelT], *, batch_size: int = 2_000
     ) -> Iterator[ModelT]:
-        """Stream an artifact into validated models, dispatching on its kind."""
+        """Stream a JSONL artifact into validated models, one row at a time.
+
+        ``batch_size`` is accepted for call-site symmetry; JSONL iteration is
+        inherently one record at a time.
+        """
+        del batch_size
         entry = self.get(name)
-        if entry.kind == "jsonl":
-            for row in iter_jsonl(entry.path):
-                yield model.model_validate(row)
-            return
-        parquet = pq.ParquetFile(entry.path)
-        for batch in parquet.iter_batches(batch_size=batch_size):
-            for row in batch.to_pylist():
-                yield model.model_validate(row)
-
-    def iter_records(self, name: str, model: type[ModelT]) -> Iterator[ModelT]:
-        """Stream a Parquet artifact into validated models."""
-        yield from self.stream(name, model)
-
-    def iter_batches(
-        self, name: str, model: type[ModelT], *, batch_size: int = 2_000
-    ) -> Iterator[ModelT]:
-        """Alias of :meth:`stream` kept for readability at call sites."""
-        yield from self.stream(name, model, batch_size=batch_size)
+        for row in iter_jsonl(entry.path):
+            yield model.model_validate(row)
 
     def read_json(self, name: str) -> object:
         """Read a JSON artifact."""
@@ -145,14 +125,14 @@ class RunContext:
 
 @dataclass(slots=True)
 class PublishedSink:
-    """A write-through sink that publishes its reference when closed."""
+    """A write-through JSONL sink that publishes its reference when closed."""
 
-    sink: ParquetSink | JsonlSink
+    sink: JsonlSink
     publish: Callable[[DatasetRef], DatasetRef]
 
-    def write(self, record: object) -> None:
-        """Buffer or append one record."""
-        self.sink.write(record)  # type: ignore[arg-type]
+    def write(self, record: BaseModel | dict[str, Any]) -> None:
+        """Append one record."""
+        self.sink.write(record)
 
     def close(self) -> DatasetRef:
         """Finalise the file and publish its reference."""
@@ -199,18 +179,6 @@ class StageContext:
         self.catalog.publish(ref, kind=ref.kind or kind)
         return ref
 
-    def emit_parquet(self, name: str, records: object) -> DatasetRef:
-        """Write, publish, and record a Parquet output."""
-        ref = self.store.write_parquet(name, records)  # type: ignore[arg-type]
-        return self._publish(ref, "parquet")
-
-    def parquet_sink(self, name: str, *, batch_size: int = 2_000) -> PublishedSink:
-        """Return a streaming Parquet sink that publishes on close."""
-        return PublishedSink(
-            self.store.parquet_sink(name, batch_size=batch_size),
-            lambda ref: self._publish(ref, "parquet"),
-        )
-
     def jsonl_sink(self, name: str) -> PublishedSink:
         """Return a streaming JSONL sink that publishes on close."""
         return PublishedSink(
@@ -218,9 +186,9 @@ class StageContext:
             lambda ref: self._publish(ref, "jsonl"),
         )
 
-    def emit_jsonl(self, name: str, records: object) -> DatasetRef:
+    def emit_jsonl(self, name: str, records: Iterable[BaseModel | dict[str, Any]]) -> DatasetRef:
         """Write, publish, and record a JSONL output."""
-        ref = self.store.write_jsonl(name, records)  # type: ignore[arg-type]
+        ref = self.store.write_jsonl(name, records)
         return self._publish(ref, "jsonl")
 
     def emit_json(self, name: str, value: object) -> DatasetRef:

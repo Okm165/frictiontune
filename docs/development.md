@@ -73,10 +73,10 @@ settings:
 
 mypy runs in `strict` mode with the `pydantic.mypy` plugin, plus `extra_checks`
 and the `redundant-expr` / `truthy-bool` / `ignore-without-code` error codes, so
-every suppression must name its error code. `pyarrow`, `textual`, and the torch
-stack ship no stubs and are covered by `ignore_missing_imports` overrides. The
-test suite is type-checked under the same policy. `disallow_subclassing_any` is relaxed only for `frictiontune.tui.*`,
-where Textual's bases resolve to `Any`.
+every suppression must name its error code. `textual` and the torch stack ship
+no stubs and are covered by `ignore_missing_imports` overrides. The test suite is
+type-checked under the same policy. `disallow_subclassing_any` is relaxed only
+for `frictiontune.tui.*`, where Textual's bases resolve to `Any`.
 
 ## Tests
 

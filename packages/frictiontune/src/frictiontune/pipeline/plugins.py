@@ -9,7 +9,7 @@ never required for the core pipeline.
 from __future__ import annotations
 
 from importlib.metadata import entry_points
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING
 
 from frictiontune.core.logging import get_logger
 
@@ -20,15 +20,6 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 PLUGIN_GROUP = "frictiontune.plugins"
-
-
-@runtime_checkable
-class PluginModule(Protocol):
-    """The shape a plugin module must provide."""
-
-    def register(self, registry: StageRegistry, backends: BackendRegistry) -> None:
-        """Register stages and/or backends."""
-        ...
 
 
 def load_plugins(registry: StageRegistry, backends: BackendRegistry) -> list[str]:

@@ -7,15 +7,9 @@ from typing import TYPE_CHECKING
 import pytest
 from frictiontune.core.artifacts import ArtifactStore
 from frictiontune.core.errors import ArtifactError
-from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-class Row(BaseModel):
-    name: str
-    value: int
 
 
 @pytest.fixture()
@@ -52,32 +46,11 @@ def test_jsonl_round_trip(store: ArtifactStore) -> None:
     assert rows == [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]
 
 
-def test_parquet_round_trip_into_models(store: ArtifactStore) -> None:
-    ref = store.write_parquet("rows", [Row(name="a", value=1), Row(name="b", value=2)])
-    assert ref.rows == 2
-    assert ref.kind == "parquet"
-
-    records = list(store.iter_records("rows", Row))
-    assert records == [Row(name="a", value=1), Row(name="b", value=2)]
-
-
-def test_parquet_sink_streams_and_closes(store: ArtifactStore) -> None:
-    sink = store.parquet_sink("streamed", batch_size=2)
-    for index in range(5):
-        sink.write(Row(name=f"r{index}", value=index))
-    ref = sink.close()
-
-    assert ref.rows == 5
-    assert len(list(store.iter_records("streamed", Row))) == 5
-
-
 def test_missing_artifact_raises(store: ArtifactStore) -> None:
     with pytest.raises(ArtifactError):
         store.read_json("absent")
     with pytest.raises(ArtifactError):
         list(store.iter_jsonl("absent"))
-    with pytest.raises(ArtifactError):
-        store.read_frame("absent")
 
 
 def test_digest_links_manifest(store: ArtifactStore) -> None:

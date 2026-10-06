@@ -88,13 +88,11 @@ enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
 module = [
   "unsloth.*",
   "bitsandbytes.*",
-  "duckdb.*",
   "torch.*",
   "transformers.*",
   "datasets.*",
   "peft.*",
   "trl.*",
-  "pyarrow.*",
   "textual.*",
 ]
 ignore_missing_imports = true

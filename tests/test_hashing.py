@@ -10,7 +10,6 @@ from frictiontune.core.hashing import (
     content_hash,
     file_sha256,
     short,
-    text_hash,
 )
 
 if TYPE_CHECKING:
@@ -23,11 +22,6 @@ def test_content_hash_is_stable_and_order_insensitive_to_keys() -> None:
 
 def test_content_hash_changes_with_value() -> None:
     assert content_hash({"a": 1}) != content_hash({"a": 2})
-
-
-def test_text_hash_is_exact_byte_identity() -> None:
-    assert text_hash("a") != text_hash("a ")
-    assert text_hash("a") == text_hash("a")
 
 
 def test_combine_hashes_is_order_sensitive() -> None:
