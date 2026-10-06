@@ -70,10 +70,6 @@ class Stage(ABC):
         """The stage name."""
         return self.spec.name
 
-    def input_names(self) -> tuple[str, ...]:
-        """Names of the artifacts this stage consumes."""
-        return tuple(self.spec.inputs)
-
     def external_input_hashes(self, run: RunContext) -> list[str]:
         """Hashes of non-catalog inputs (e.g. the corpus DB), for the run id."""
         return []

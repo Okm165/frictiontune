@@ -35,10 +35,6 @@ class StageRegistry:
             known = ", ".join(sorted(self._stages)) or "(none)"
             raise ConfigError(f"unknown stage {name!r}; known: {known}") from exc
 
-    def has(self, name: str) -> bool:
-        """Whether a stage with ``name`` is registered."""
-        return name in self._stages
-
     def names(self) -> list[str]:
         """Every registered stage name."""
         return sorted(self._stages)

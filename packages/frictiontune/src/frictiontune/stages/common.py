@@ -14,7 +14,7 @@ from frictiontune.core.errors import StageError
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
-    from frictiontune.config.models import RoleName, RunConfig
+    from frictiontune.config.models import RunConfig
     from frictiontune.domain.friction import FrictionEvent
     from frictiontune.domain.trace import Message
 
@@ -42,17 +42,6 @@ def render_transcript(
             label = f"{label}(tool-error)"
         lines.append(f"{index} | {label} | {body}")
     return "\n".join(lines)
-
-
-def render_turns(messages: Sequence[Message], indices: Sequence[int]) -> str:
-    """Render only the selected turn indices."""
-    selected = [
-        f"{index} | {messages[index].role} | "
-        f"{clip(messages[index].content_text(), _TRANSCRIPT_QUOTE_LIMIT)}"
-        for index in indices
-        if 0 <= index < len(messages)
-    ]
-    return "\n".join(selected)
 
 
 def analyst_prompt_values(
@@ -107,14 +96,6 @@ async def bounded_gather(
             return await factory(item)
 
     return list(await asyncio.gather(*(_run(item) for item in items)))
-
-
-def role_config(config: RunConfig, role: RoleName) -> object:
-    """Return the role binding, raising a stage error if it is missing."""
-    try:
-        return config.role(role)
-    except KeyError as exc:
-        raise StageError("config", str(exc)) from exc
 
 
 def validate_event(event: FrictionEvent, config: RunConfig) -> FrictionEvent:

@@ -102,14 +102,3 @@ class RuleRuntime:
             )
             results.append(HookResult(rule_id=hook.rule_id, verdict=verdict))
         return results
-
-    def violations(self, results: Sequence[HookResult]) -> list[HookResult]:
-        """Filter results to hooks that fired and were not followed."""
-        return [
-            result for result in results if result.verdict.fires and not result.verdict.prevents
-        ]
-
-
-def hook_index(hooks: Sequence[RuntimeHook]) -> dict[str, RuntimeHook]:
-    """Index hooks by rule id."""
-    return {hook.rule_id: hook for hook in hooks}
