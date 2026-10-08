@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from frictiontune.core.json import JsonObject
 from frictiontune.core.retry import RetryPolicy
@@ -103,10 +103,18 @@ class TaxonomyConfig(BaseConfigModel):
 
     @field_validator("leaves")
     @classmethod
-    def _validate_leaves(cls, value: dict[str, tuple[str, str]]) -> dict[str, tuple[str, str]]:
+    def _validate_leaves(
+        cls, value: dict[str, tuple[str, str]], info: ValidationInfo
+    ) -> dict[str, tuple[str, str]]:
+        forms = info.data.get("forms", [])
+        causes = info.data.get("causes", [])
         for leaf, (form, cause) in value.items():
             if not leaf or not form or not cause:
                 raise ValueError("taxonomy leaves must be non-empty (leaf, form, cause)")
+            if form not in forms:
+                raise ValueError(f"taxonomy leaf {leaf!r} references unknown form {form!r}")
+            if cause not in causes:
+                raise ValueError(f"taxonomy leaf {leaf!r} references unknown cause {cause!r}")
         return value
 
 

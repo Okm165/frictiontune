@@ -6,9 +6,10 @@ from pathlib import Path
 
 import pytest
 from frictiontune.config.loader import expand_env, load_config, parse_set_overrides
-from frictiontune.config.models import RoleName
+from frictiontune.config.models import RoleName, TaxonomyConfig
 from frictiontune.core.errors import ConfigError
 from frictiontune.pipeline.registry import default_registry, validate_stage_settings
+from pydantic import ValidationError
 
 
 def test_load_config_with_hardware_preset(config_dir: Path) -> None:
@@ -29,6 +30,32 @@ def test_taxonomy_axes_and_leaves_are_loaded(config_dir: Path) -> None:
     form, cause = config.taxonomy.leaves["instruction_misread"]
     assert form in config.taxonomy.forms
     assert cause in config.taxonomy.causes
+
+
+def _taxonomy(**leaves: tuple[str, str]) -> TaxonomyConfig:
+    return TaxonomyConfig(
+        forms=["known-form"],
+        causes=["known-cause"],
+        costs=[],
+        resolutions=[],
+        leaves=dict(leaves),
+    )
+
+
+def test_taxonomy_leaf_must_reference_a_declared_form() -> None:
+    with pytest.raises(ValidationError, match="unknown form"):
+        _taxonomy(x=("mystery-form", "known-cause"))
+
+
+def test_taxonomy_leaf_must_reference_a_declared_cause() -> None:
+    with pytest.raises(ValidationError, match="unknown cause"):
+        _taxonomy(x=("known-form", "mystery-cause"))
+
+
+def test_taxonomy_consistent_leaves_are_accepted() -> None:
+    taxonomy = _taxonomy(x=("known-form", "known-cause"))
+
+    assert taxonomy.leaves == {"x": ("known-form", "known-cause")}
 
 
 def test_empty_env_expansion_drops_key(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
