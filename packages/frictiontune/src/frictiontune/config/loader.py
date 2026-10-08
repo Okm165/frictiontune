@@ -48,10 +48,17 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 
 def expand_env(value: Any) -> Any:
-    """Recursively expand ``${VAR}`` references inside strings."""
+    """Recursively expand ``${VAR}`` and ``${VAR:-default}`` references.
+
+    ``:-`` follows POSIX shell semantics: the default applies when the variable
+    is *unset or empty*, matching the documented syntax. Using
+    ``os.environ.get(name, default)`` would only apply the default when the
+    variable is unset, so an exported-but-empty variable (``VAR=``) would
+    silently drop the setting instead of falling back to the documented default.
+    """
     if isinstance(value, str):
         return _ENV_PATTERN.sub(
-            lambda match: os.environ.get(match.group(1), match.group(2) or ""), value
+            lambda match: os.environ.get(match.group(1)) or match.group(2) or "", value
         )
     if isinstance(value, Mapping):
         return {str(key): expand_env(item) for key, item in value.items()}

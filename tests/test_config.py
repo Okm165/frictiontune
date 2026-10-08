@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from frictiontune.config.loader import load_config, parse_set_overrides
+from frictiontune.config.loader import expand_env, load_config, parse_set_overrides
 from frictiontune.config.models import RoleName
 from frictiontune.core.errors import ConfigError
 from frictiontune.pipeline.registry import default_registry, validate_stage_settings
@@ -89,6 +89,24 @@ def test_parse_set_overrides_nests_and_coerces_types() -> None:
 def test_parse_set_overrides_rejects_malformed() -> None:
     with pytest.raises(ConfigError):
         parse_set_overrides(["no_equals_sign"])
+
+
+def test_env_default_applies_when_variable_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FRICTIONTUNE_TEST_URL", "")
+
+    assert expand_env("${FRICTIONTUNE_TEST_URL:-http://fallback}") == "http://fallback"
+
+
+def test_env_value_wins_over_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FRICTIONTUNE_TEST_URL", "http://set")
+
+    assert expand_env("${FRICTIONTUNE_TEST_URL:-http://fallback}") == "http://set"
+
+
+def test_env_without_default_is_empty_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FRICTIONTUNE_TEST_URL", raising=False)
+
+    assert expand_env("${FRICTIONTUNE_TEST_URL}") == ""
 
 
 def test_stage_settings_accept_known_knobs(config_dir: Path) -> None:
