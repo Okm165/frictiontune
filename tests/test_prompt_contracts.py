@@ -6,6 +6,13 @@ not pass, but only on the code path that actually runs. This test resolves every
 with the placeholders in the named prompt, so a prompt and its call site cannot
 drift apart unnoticed (the class of bug that once made ``evaluate_replay``
 render ``judge`` without its threshold).
+
+It also pins the schema each call passes against the ``schema:`` the prompt
+declares. The gateway only logs a warning on a mismatch, but the contract sent
+to the model is generated from the pydantic class at the call site while the
+prompt's prose is written against the class it names: if those two disagree the
+prompt is teaching a different shape than it enforces, so this is a hard error
+here instead of a silent warning in production.
 """
 
 from __future__ import annotations
@@ -89,6 +96,15 @@ def _resolve_keys(arg: ast.expr, dicts: dict[str, set[str]]) -> set[str] | None:
     return None
 
 
+def _resolve_schema_name(arg: ast.expr) -> str | None:
+    """Resolve the schema argument to the class name it names, if it is a name."""
+    if isinstance(arg, ast.Name):
+        return arg.id
+    if isinstance(arg, ast.Attribute):
+        return arg.attr
+    return None
+
+
 def test_call_sites_supply_exactly_their_prompt_variables() -> None:
     registry = default_registry()
     package_root = Path(frictiontune.__file__).parent
@@ -102,17 +118,27 @@ def test_call_sites_supply_exactly_their_prompt_variables() -> None:
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "complete_structured"
-                and len(node.args) >= 4
+                and len(node.args) >= 5
             ):
                 continue
             prompt = _resolve_str(node.args[2], constants)
-            keys = _resolve_keys(node.args[3], _local_dicts(_function_of(tree, node.lineno)))
-            if prompt is None or keys is None:
+            if prompt is None:
                 continue
             template = registry.get(prompt)
+            where = f"{path.name}:{node.lineno} ({prompt})"
+
+            schema_name = _resolve_schema_name(node.args[4])
+            if schema_name is not None:
+                assert template.schema_name == schema_name, (
+                    f"{where} passes schema {schema_name} but the prompt "
+                    f"declares {template.schema_name!r}"
+                )
+
+            keys = _resolve_keys(node.args[3], _local_dicts(_function_of(tree, node.lineno)))
+            if keys is None:
+                continue
             needed = set(_PLACEHOLDER.findall(template.system))
             needed |= set(_PLACEHOLDER.findall(template.user))
-            where = f"{path.name}:{node.lineno} ({prompt})"
             assert not needed - keys, f"{where} is missing prompt variables {sorted(needed - keys)}"
             assert not keys - needed, f"{where} passes unused variables {sorted(keys - needed)}"
             checked += 1
