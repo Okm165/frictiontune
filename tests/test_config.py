@@ -118,6 +118,14 @@ def test_parse_set_overrides_rejects_malformed() -> None:
         parse_set_overrides(["no_equals_sign"])
 
 
+def test_missing_role_raises_config_error(config_dir: Path) -> None:
+    config = load_config(config_dir)
+    trimmed = config.model_copy(update={"llm": {}})
+
+    with pytest.raises(ConfigError, match="not configured"):
+        trimmed.role(RoleName.JUDGE)
+
+
 def test_env_default_applies_when_variable_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FRICTIONTUNE_TEST_URL", "")
 

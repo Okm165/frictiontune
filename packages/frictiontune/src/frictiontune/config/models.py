@@ -13,6 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
+from frictiontune.core.errors import ConfigError
 from frictiontune.core.json import JsonObject
 from frictiontune.core.retry import RetryPolicy
 
@@ -145,8 +146,14 @@ class RunConfig(BaseConfigModel):
     stages: dict[str, JsonObject] = Field(default_factory=dict)
 
     def role(self, name: RoleName) -> LlmRoleConfig:
-        """Return the configuration for ``name`` or raise a clear error."""
+        """Return the configuration for ``name`` or raise a clear error.
+
+        A missing role is a configuration error, not a bare ``KeyError``: it is
+        raised as :class:`ConfigError` so a run fails with a typed, catchable
+        message (and ``frictiontune validate`` can surface it) rather than an
+        unhandled traceback in the middle of a stage.
+        """
         try:
             return self.llm[name]
         except KeyError as exc:
-            raise KeyError(f"role {name.value!r} is not configured") from exc
+            raise ConfigError(f"role {name.value!r} is not configured") from exc
