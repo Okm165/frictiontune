@@ -35,6 +35,7 @@ from frictiontune_train.loaders import (
     load_unsloth,
     save_adapter,
 )
+from frictiontune_train.trl_compat import resolve_config_kwargs, trainer_token_kwargs
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -155,31 +156,40 @@ def run_sft(request: TrainingRequest) -> TrainingResult:
 
     config_cls = getattr(trl, "SFTConfig", None) or trl.TrainingArguments
     config = config_cls(
-        output_dir=request.output_dir,
-        per_device_train_batch_size=request.hardware.per_device_batch,
-        gradient_accumulation_steps=request.hardware.grad_accum,
-        learning_rate=request.learning_rate,
-        num_train_epochs=request.epochs,
-        max_steps=request.max_steps,
-        max_seq_length=request.max_seq_len,
-        logging_steps=10,
-        save_steps=request.save_steps,
-        save_total_limit=2,
-        bf16=request.hardware.dtype == "bf16",
-        fp16=request.hardware.dtype == "fp16",
-        gradient_checkpointing=request.hardware.gradient_checkpointing,
-        seed=request.seed,
-        report_to=[],
-        # The dataset is already tokenized and masked; do not re-tokenize.
-        dataset_kwargs={"skip_prepare_dataset": True},
-        remove_unused_columns=False,
+        **resolve_config_kwargs(
+            config_cls,
+            {
+                "output_dir": request.output_dir,
+                "per_device_train_batch_size": request.hardware.per_device_batch,
+                "gradient_accumulation_steps": request.hardware.grad_accum,
+                "learning_rate": request.learning_rate,
+                "num_train_epochs": request.epochs,
+                "max_steps": request.max_steps,
+                "max_seq_length": request.max_seq_len,
+                "logging_steps": 10,
+                "save_steps": request.save_steps,
+                "save_total_limit": 2,
+                "bf16": request.hardware.dtype == "bf16",
+                "fp16": request.hardware.dtype == "fp16",
+                "gradient_checkpointing": request.hardware.gradient_checkpointing,
+                "seed": request.seed,
+                "report_to": [],
+                # The dataset is already tokenized and masked; do not re-tokenize.
+                "dataset_kwargs": {"skip_prepare_dataset": True},
+                "remove_unused_columns": False,
+            },
+            # ``max_seq_length`` is the pre-0.17 name; current TRL uses
+            # ``max_length`` and removes the old spelling in 2.0.
+            aliases={"max_seq_length": ("max_length", "max_seq_length")},
+            stage="train_sft",
+        )
     )
     trainer = trl.SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
         train_dataset=train_dataset,
         data_collator=_collator(pad_token_id),
         args=config,
+        **trainer_token_kwargs(trl.SFTTrainer, tokenizer, stage="train_sft"),
     )
 
     started = time.time()

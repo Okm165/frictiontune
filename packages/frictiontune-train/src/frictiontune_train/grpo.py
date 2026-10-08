@@ -21,6 +21,7 @@ from frictiontune_train.lazy import require, torch_hint
 from frictiontune_train.loaders import continue_from_adapter, load_tokenizer, save_adapter
 from frictiontune_train.reward import build_reward
 from frictiontune_train.sft import load_model_and_tokenizer
+from frictiontune_train.trl_compat import resolve_config_kwargs, trainer_token_kwargs
 
 
 def _read_prompts(path: Path) -> list[str]:
@@ -82,25 +83,34 @@ def run_grpo(request: GrpoRequest) -> TrainingResult:
 
     config_cls = getattr(trl, "GRPOConfig", None) or trl.TrainingArguments
     config = config_cls(
-        output_dir=request.output_dir,
-        learning_rate=request.learning_rate,
-        max_steps=request.max_steps,
-        per_device_train_batch_size=request.hardware.per_device_batch,
-        gradient_accumulation_steps=request.hardware.grad_accum,
-        num_generations=request.group_size,
-        max_new_tokens=request.max_new_tokens,
-        bf16=request.hardware.dtype == "bf16",
-        fp16=request.hardware.dtype == "fp16",
-        gradient_checkpointing=request.hardware.gradient_checkpointing,
-        seed=request.seed,
-        report_to=[],
+        **resolve_config_kwargs(
+            config_cls,
+            {
+                "output_dir": request.output_dir,
+                "learning_rate": request.learning_rate,
+                "max_steps": request.max_steps,
+                "per_device_train_batch_size": request.hardware.per_device_batch,
+                "gradient_accumulation_steps": request.hardware.grad_accum,
+                "num_generations": request.group_size,
+                "max_new_tokens": request.max_new_tokens,
+                "bf16": request.hardware.dtype == "bf16",
+                "fp16": request.hardware.dtype == "fp16",
+                "gradient_checkpointing": request.hardware.gradient_checkpointing,
+                "seed": request.seed,
+                "report_to": [],
+            },
+            # GRPO generates via ``max_completion_length``; ``max_new_tokens``
+            # is a ``generate`` kwarg that GRPOConfig would silently ignore.
+            aliases={"max_new_tokens": ("max_completion_length", "max_new_tokens")},
+            stage="train_grpo",
+        )
     )
     trainer = trl.GRPOTrainer(
         model=model,
         reward_funcs=reward,
         args=config,
         train_dataset=dataset,
-        tokenizer=tokenizer,
+        **trainer_token_kwargs(trl.GRPOTrainer, tokenizer, stage="train_grpo"),
     )
 
     started = time.time()
