@@ -13,6 +13,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from frictiontune.core.json import dumps, try_loads
 from frictiontune.domain.trace import (
     CompactionPart,
     FileRefPart,
@@ -42,27 +43,76 @@ class CorpusStats:
     tool_errors: int = 0
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
-    uri = f"file:{db_path}?mode=ro&immutable=1"
-    connection = sqlite3.connect(uri, uri=True)
+def _epoch(value: Any) -> int:
+    """Coerce a stored timestamp to an integer epoch, or ``0`` if it is not one.
+
+    Real databases store timestamps as integers, floats, or occasionally strings;
+    a non-numeric value must not crash the whole ingest, so it degrades to ``0``.
+    """
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(float(value))
+        except ValueError:
+            return 0
+    return 0
+
+
+def _open(db_path: Path, params: str) -> sqlite3.Connection:
+    """Open a read-only connection that forces SQLite to touch the file now."""
+    connection = sqlite3.connect(f"file:{db_path}?{params}", uri=True)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute("PRAGMA query_only = 1")
+    # sqlite3.connect is lazy; read the header so an unusable mode fails here,
+    # where the caller can fall back, rather than on the first real query.
+    connection.execute("PRAGMA schema_version").fetchone()
     return connection
 
 
+def _connect(db_path: Path) -> sqlite3.Connection:
+    """Open the corpus read-only against a possibly-live writer.
+
+    ``immutable=1`` tells SQLite the file never changes, so it skips locking and
+    ignores the write-ahead log: against a live session that silently reads stale
+    or torn data. Normal read-only mode plus a busy timeout is safe for a
+    concurrently-written WAL database. Only if read-only opening is impossible
+    (e.g. a read-only filesystem with no shared-memory file) does it fall back to
+    an immutable snapshot, preferring slightly stale data over a hard failure.
+    """
+    try:
+        return _open(db_path, "mode=ro")
+    except sqlite3.OperationalError:
+        return _open(db_path, "mode=ro&immutable=1")
+
+
 def _content_text(content: Any) -> str:
+    """Render a tool result payload to text without discarding structured output.
+
+    A plain string is used as-is; a content-part list is concatenated; a dict
+    prefers its ``text`` field and otherwise serializes faithfully, so an object
+    result (some tools return one) still reaches the trained transcript.
+    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
         chunks: list[str] = []
         for item in content:
-            if isinstance(item, dict):
-                text = item.get("text")
-                if isinstance(text, str):
-                    chunks.append(text)
-            elif isinstance(item, str):
+            if isinstance(item, str):
                 chunks.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                chunks.append(text if isinstance(text, str) else dumps(item))
         return "\n".join(chunks)
-    return ""
+    if isinstance(content, dict):
+        text = content.get("text")
+        return text if isinstance(text, str) else dumps(content)
+    if content is None:
+        return ""
+    return str(content)
 
 
 def _parse_assistant_parts(parts: Any) -> tuple[list[Part], int, int]:
@@ -85,7 +135,14 @@ def _parse_assistant_parts(parts: Any) -> tuple[list[Part], int, int]:
             status = str(state.get("status") or part.get("status") or "")
             is_error = status in {"error", "failed"} or bool(state.get("error"))
             output = _content_text(state.get("content"))
-            arguments = state.get("input") if isinstance(state.get("input"), dict) else {}
+            raw_input = state.get("input")
+            if isinstance(raw_input, dict):
+                arguments = raw_input
+            elif isinstance(raw_input, str):
+                decoded = try_loads(raw_input)
+                arguments = decoded if isinstance(decoded, dict) else {}
+            else:
+                arguments = {}
             parsed.append(
                 ToolPart(
                     name=str(part.get("name") or "unknown"),
@@ -136,7 +193,7 @@ def _message_from_row(row: sqlite3.Row, index: int) -> tuple[Message, int, int] 
 
     kind = str(row["type"])
     session_id = str(row["session_id"])
-    time_created = int(row["time_created"] or 0)
+    time_created = _epoch(row["time_created"])
 
     if kind == "assistant":
         parts, tool_calls, tool_errors = _parse_assistant_parts(data.get("content"))
@@ -233,7 +290,7 @@ class OpenCodeCorpus:
                     title=str(session_row["title"])
                     if "title" in columns and session_row["title"]
                     else None,
-                    time_created=int(session_row["time_created"] or 0)
+                    time_created=_epoch(session_row["time_created"])
                     if "time_created" in columns
                     else 0,
                 )

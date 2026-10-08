@@ -863,7 +863,7 @@ class EvaluateExternal(Stage):
             if not path.is_file():
                 ctx.logger.warning("external corpus missing", path=path_str)
                 continue
-            for row in iter_jsonl(path):
+            for row in iter_jsonl(path, skip_invalid=True):
                 if isinstance(row, dict) and isinstance(row.get("prompt"), str):
                     tasks.append({"prompt": str(row["prompt"])})
         return tasks

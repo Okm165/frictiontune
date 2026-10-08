@@ -10,7 +10,7 @@ import pytest
 from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.cache import ContentCache
 from frictiontune.core.retry import RetryPolicy
-from frictiontune.llm.client import LlmClient, build_response_format
+from frictiontune.llm.client import LlmClient, _message_text, build_response_format
 from frictiontune.llm.messages import ChatMessage
 from frictiontune.llm.transport import TRANSPORT_RETRYABLE
 from openai import (
@@ -143,3 +143,14 @@ async def test_client_retries_a_provider_transient_error(tmp_path: Path) -> None
     response = await client.complete(RoleName.JUDGE, config, [ChatMessage.user("hi")])
 
     assert response.text == '{"ok":true}'
+
+
+def test_message_text_concatenates_content_part_lists() -> None:
+    message = SimpleNamespace(content=[{"type": "text", "text": "a"}, "b", {"text": "c"}])
+
+    assert _message_text(message) == "a\nb\nc"
+
+
+def test_message_text_degrades_unrecognised_content_to_empty() -> None:
+    assert _message_text(SimpleNamespace(content=None)) == ""
+    assert _message_text(SimpleNamespace(content={"unexpected": True})) == ""

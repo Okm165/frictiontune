@@ -45,12 +45,18 @@ _STRUCTURAL_KEYS = frozenset({"kind", "role", "name", "call_id", "status"})
 def _iter_string_leaves(
     node: object, path: tuple[object, ...] = ()
 ) -> Iterator[tuple[tuple[object, ...], str]]:
-    """Yield every string leaf in a JSON-like tree with its relative path."""
+    """Yield every string leaf in a JSON-like tree with its relative path.
+
+    Structural keys are skipped only at the *top level* of a part, where they
+    identify the part, its role, and the tool linkage. Inside a tool call's
+    ``arguments`` a key named ``name`` or ``status`` is ordinary data and must
+    still be scanned, so the skip must not be applied recursively.
+    """
     if isinstance(node, str):
         yield path, node
     elif isinstance(node, dict):
         for key, value in node.items():
-            if key in _STRUCTURAL_KEYS:
+            if not path and key in _STRUCTURAL_KEYS:
                 continue
             yield from _iter_string_leaves(value, (*path, key))
     elif isinstance(node, list):

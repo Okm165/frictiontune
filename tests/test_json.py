@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
-from frictiontune.core.json import dumps, json_block_validity, loads, try_loads
+from typing import TYPE_CHECKING
+
+import pytest
+from frictiontune.core.errors import ArtifactError
+from frictiontune.core.json import dumps, iter_jsonl, json_block_validity, loads, try_loads
 from frictiontune.llm.parsing import extract_json_object, iter_json_objects
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_dumps_is_canonical_and_sorted() -> None:
@@ -98,3 +105,18 @@ def test_json_block_validity_scores_parseable_blocks() -> None:
 def test_json_block_validity_averages_over_blocks() -> None:
     text = '```json\n{"a": 1}\n```\n```json\n{oops}\n```'
     assert json_block_validity(text) == 0.5
+
+
+def test_iter_jsonl_names_the_corrupt_line(tmp_path: Path) -> None:
+    target = tmp_path / "rows.jsonl"
+    target.write_text('{"a": 1}\n{oops}\n', encoding="utf-8")
+
+    with pytest.raises(ArtifactError, match=r"rows\.jsonl:2"):
+        list(iter_jsonl(target))
+
+
+def test_iter_jsonl_can_skip_invalid_lines_for_external_corpora(tmp_path: Path) -> None:
+    target = tmp_path / "rows.jsonl"
+    target.write_text('{"a": 1}\n{oops}\n{"b": 2}\n', encoding="utf-8")
+
+    assert list(iter_jsonl(target, skip_invalid=True)) == [{"a": 1}, {"b": 2}]

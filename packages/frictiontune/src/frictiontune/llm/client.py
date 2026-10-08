@@ -24,7 +24,7 @@ from frictiontune.core.errors import LlmError
 from frictiontune.core.hashing import content_hash
 from frictiontune.core.logging import get_logger
 from frictiontune.core.retry import with_retry
-from frictiontune.llm.transport import TRANSPORT_RETRYABLE
+from frictiontune.llm.transport import is_transport_retryable
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -62,6 +62,30 @@ def _api_key(config: LlmRoleConfig) -> str:
     if config.api_key_env:
         return os.environ.get(config.api_key_env, "EMPTY")
     return "EMPTY"
+
+
+def _message_text(message: Any) -> str:
+    """Extract text from a completion message, tolerating content-part lists.
+
+    OpenAI-compatible servers return ``content`` as a string, but some return a
+    list of content parts. Concatenating the text parts keeps a real reply from
+    being rejected as a non-string, and anything unrecognised degrades to ``""``
+    so the gateway's repair loop can re-ask rather than crashing on a type error.
+    """
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                chunks.append(item)
+                continue
+            text = item.get("text") if isinstance(item, dict) else getattr(item, "text", None)
+            if isinstance(text, str):
+                chunks.append(text)
+        return "\n".join(chunks)
+    return ""
 
 
 def build_response_format(
@@ -204,7 +228,7 @@ class LlmClient:
                 completion = await with_retry(
                     _call,
                     policy=config.retry,
-                    retry_on=TRANSPORT_RETRYABLE,
+                    retry_on=is_transport_retryable,
                     logger=_log,
                 )
         except OSError as exc:
@@ -219,7 +243,7 @@ class LlmClient:
         message = getattr(choice, "message", None)
         usage = getattr(completion, "usage", None)
         response = LlmResponse(
-            text=getattr(message, "content", None) or "",
+            text=_message_text(message),
             model=getattr(completion, "model", None) or config.model,
             finish_reason=getattr(choice, "finish_reason", None),
             usage=TokenUsage(

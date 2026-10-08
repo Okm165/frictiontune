@@ -35,3 +35,21 @@ def test_get_and_set_at_navigate_a_nested_path() -> None:
     _set_at(data, ("parts", 0, "arguments", "k"), "w")
 
     assert _get_at(data, ("parts", 0, "arguments", "k")) == "w"
+
+
+def test_structural_keys_are_skipped_only_at_the_part_top_level() -> None:
+    # `name` and `status` are structural at the part level, but inside a tool
+    # call's arguments they are ordinary data and must still be scanned.
+    part = {
+        "kind": "tool",
+        "name": "shell",
+        "status": "ok",
+        "arguments": {"name": "sk-live-0123456789abcdef", "status": "secret-value"},
+    }
+
+    values = {value for _path, value in _iter_string_leaves(part)}
+
+    assert "shell" not in values
+    assert "ok" not in values
+    assert "sk-live-0123456789abcdef" in values
+    assert "secret-value" in values

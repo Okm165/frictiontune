@@ -78,11 +78,14 @@ def write_jsonl(path: Path, rows: Iterable[Any]) -> int:
     return count
 
 
-def iter_jsonl(path: Path) -> Iterator[JsonValue]:
+def iter_jsonl(path: Path, *, skip_invalid: bool = False) -> Iterator[JsonValue]:
     """Yield parsed JSON objects from a JSONL file, skipping blank lines.
 
     A malformed line names its file and line number rather than surfacing a bare
-    :class:`json.JSONDecodeError`, so an interrupted write is diagnosable.
+    :class:`json.JSONDecodeError`, so an interrupted write is diagnosable. Set
+    ``skip_invalid`` for external, human-authored corpora, where one bad line
+    should not abort a whole stage; internal artifacts keep the strict default so
+    a corrupted artifact is never silently ignored.
     """
     with path.open("r", encoding="utf-8") as handle:
         for number, line in enumerate(handle, start=1):
@@ -92,6 +95,8 @@ def iter_jsonl(path: Path) -> Iterator[JsonValue]:
             try:
                 yield loads(line)
             except json.JSONDecodeError as exc:
+                if skip_invalid:
+                    continue
                 raise ArtifactError(f"{path}:{number}: malformed JSON line: {exc.msg}") from exc
 
 
