@@ -23,6 +23,7 @@ from frictiontune.evaluation import GoldenReport, evaluate_golden, load_bundled_
 from frictiontune.pipeline.dag import full_graph
 from frictiontune.pipeline.manifest import RunManifest, read_run_manifest
 from frictiontune.pipeline.orchestrator import Orchestrator
+from frictiontune.pipeline.registry import default_registry, validate_stage_settings
 from frictiontune.reporting.dashboard import ReplayDashboard
 from frictiontune.reporting.report import human_size, render_dashboard, render_run_report
 from frictiontune.version import __version__
@@ -157,6 +158,7 @@ def validate(
     """Load and validate the configuration, then print a summary."""
     try:
         config = _load(config_dir, hardware=hardware, environment=environment, overrides=set_)
+        validate_stage_settings(config, default_registry())
     except FrictionTuneError as exc:
         raise _fail(str(exc)) from exc
     console.print(_summary(config))

@@ -159,8 +159,8 @@ def load_config(
 def parse_set_overrides(items: list[str]) -> dict[str, Any]:
     """Parse ``a.b.c=value`` strings into a nested override mapping.
 
-    Values are parsed as YAML scalars, so ``stages.curate.enabled=false`` yields a
-    boolean and ``stages.judge.top_p=0.9`` yields a float.
+    Values are parsed as YAML scalars, so ``stages.curate.near_dedup=false``
+    yields a boolean and ``stages.judge.temperature=0.9`` yields a float.
     """
     root: dict[str, Any] = {}
     for item in items:

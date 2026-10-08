@@ -8,6 +8,7 @@ import pytest
 from frictiontune.config.loader import load_config, parse_set_overrides
 from frictiontune.config.models import RoleName
 from frictiontune.core.errors import ConfigError
+from frictiontune.pipeline.registry import default_registry, validate_stage_settings
 
 
 def test_load_config_with_hardware_preset(config_dir: Path) -> None:
@@ -71,16 +72,33 @@ def test_hardware_can_be_overridden(config_dir: Path) -> None:
 
 def test_parse_set_overrides_nests_and_coerces_types() -> None:
     parsed = parse_set_overrides(
-        ["hardware.devices=2", "evaluation.time_split_quantile=0.7", "stages.curate.enabled=false"]
+        [
+            "hardware.devices=2",
+            "evaluation.time_split_quantile=0.7",
+            "stages.curate.near_dedup=false",
+        ]
     )
 
     assert parsed == {
         "hardware": {"devices": 2},
         "evaluation": {"time_split_quantile": 0.7},
-        "stages": {"curate": {"enabled": False}},
+        "stages": {"curate": {"near_dedup": False}},
     }
 
 
 def test_parse_set_overrides_rejects_malformed() -> None:
     with pytest.raises(ConfigError):
         parse_set_overrides(["no_equals_sign"])
+
+
+def test_stage_settings_accept_known_knobs(config_dir: Path) -> None:
+    config = load_config(config_dir, overrides={"stages": {"curate": {"near_dedup": False}}})
+
+    validate_stage_settings(config, default_registry())
+
+
+def test_stage_settings_reject_unknown_knob(config_dir: Path) -> None:
+    config = load_config(config_dir, overrides={"stages": {"curate": {"near_dedup_typo": True}}})
+
+    with pytest.raises(ConfigError, match="invalid config for stage 'curate'"):
+        validate_stage_settings(config, default_registry())

@@ -19,7 +19,7 @@ from frictiontune.llm.gateway import LlmGateway
 from frictiontune.llm.prompts.registry import default_registry
 from frictiontune.pipeline.context import RunContext
 from frictiontune.pipeline.plugins import load_plugins
-from frictiontune.pipeline.registry import StageRegistry
+from frictiontune.pipeline.registry import StageRegistry, validate_stage_settings
 from frictiontune.pipeline.registry import default_registry as stage_registry
 
 if TYPE_CHECKING:
@@ -58,6 +58,7 @@ class Application:
         backends.set_embedder(OpenAiEmbedder(config.embedding, cache))
         stage_reg = stages or stage_registry()
         plugins = load_plugins(stage_reg, backends)
+        validate_stage_settings(config, stage_reg)
         logger.debug("application built", plugins=plugins, stages=len(stage_reg.names()))
         return cls(
             config=config,

@@ -22,7 +22,9 @@ uv run frictiontune validate --hardware 3x24g --environment example --set seed=7
 ```
 
 The final tree is validated into a strict `RunConfig`. Unknown keys are
-**rejected**, so a typo fails at load time, not mid-run.
+**rejected**, so a typo fails at load time, not mid-run. `frictiontune validate`
+also parses every `stages/<name>` block through that stage's strict settings
+model, so a mistyped stage knob is caught before any work starts.
 
 ## Environment expansion
 

@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
+
+from pydantic import ValidationError as PydanticValidationError
 
 from frictiontune.core.errors import ConfigError
 from frictiontune.pipeline.stage import Stage
+
+if TYPE_CHECKING:
+    from frictiontune.config.models import RunConfig
 
 StageT = TypeVar("StageT", bound=type[Stage])
 
@@ -54,6 +59,22 @@ def default_registry() -> StageRegistry:
     registry = StageRegistry()
     _load_builtin_stages(registry)
     return registry
+
+
+def validate_stage_settings(config: RunConfig, registry: StageRegistry) -> None:
+    """Validate every registered stage's config block against its settings model.
+
+    ``RunConfig.stages`` is a free-form mapping, so without this a typo'd knob
+    would pass ``frictiontune validate`` and only surface once its stage finally
+    ran. Each block is parsed through the stage's strict ``settings_model`` (which
+    forbids extra keys) so misconfiguration fails up front, before any work.
+    """
+    for stage in registry.all():
+        block = config.stages.get(stage.name, {})
+        try:
+            stage.settings_model.model_validate(block)
+        except PydanticValidationError as exc:
+            raise ConfigError(f"invalid config for stage {stage.name!r}: {exc}") from exc
 
 
 def register(stage_cls: StageT) -> StageT:
