@@ -469,13 +469,15 @@ class RaftSrft(Stage):
     )
     settings_model = RaftSrftSettings
 
-    def _clean_episode_example(self, episode: Episode, index: int) -> TrainingExample | None:
+    def _clean_episode_example(
+        self, episode: Episode, index: int, *, min_assistant_turns: int
+    ) -> TrainingExample | None:
         assistant_positions = [
             position
             for position, message in enumerate(episode.messages)
             if message.role == "assistant"
         ]
-        if len(assistant_positions) < self._min_turns:
+        if len(assistant_positions) < min_assistant_turns:
             return None
         first = assistant_positions[0]
         context = episode.messages[:first]
@@ -494,7 +496,6 @@ class RaftSrft(Stage):
     async def run(self, ctx: StageContext) -> StageResult:
         """Emit success examples from episodes without friction events."""
         settings = ctx.settings(self.settings_model)
-        self._min_turns = settings.min_assistant_turns
         grouped = read_events_by_episode(ctx)
         sink = ctx.jsonl_sink("sft_raft")
         produced = 0
@@ -505,7 +506,9 @@ class RaftSrft(Stage):
             if seen >= settings.max_episodes:
                 break
             seen += 1
-            example = self._clean_episode_example(episode, produced)
+            example = self._clean_episode_example(
+                episode, produced, min_assistant_turns=settings.min_assistant_turns
+            )
             if example is None:
                 continue
             sink.write(example)
