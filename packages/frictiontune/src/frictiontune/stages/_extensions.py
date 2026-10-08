@@ -765,7 +765,9 @@ class EvaluateSimUser(Stage):
             if turn.resolved:
                 break
             response = await ctx.run.gateway.complete_text(role, config, history)
-            history.append(ChatMessage.assistant(response.text))
+            history.append(
+                ChatMessage.assistant(clip(response.text, settings.max_generation_chars))
+            )
             turns += 1
         return turns
 
@@ -914,8 +916,12 @@ class EvaluateExternal(Stage):
         if not tasks:
             raise StageError("evaluate_external", "no external corpora configured or readable")
 
-        base_role = ctx.config.role(RoleName.TARGET)
-        adapter_role = ctx.config.role(RoleName.ADAPTER)
+        base_role = ctx.config.role(RoleName.TARGET).model_copy(
+            update={"max_tokens": settings.max_tokens}
+        )
+        adapter_role = ctx.config.role(RoleName.ADAPTER).model_copy(
+            update={"max_tokens": settings.max_tokens}
+        )
         base_scores: list[float] = []
         adapter_scores: list[float] = []
         for task in tasks:
