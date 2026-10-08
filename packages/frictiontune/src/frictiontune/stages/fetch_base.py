@@ -62,7 +62,10 @@ def probe_base(repo_dir: Path, repo_id: str) -> BaseProbe:
     if not config_path.is_file():
         raise StageError("fetch_base", f"no config.json in {repo_dir}")
 
-    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise StageError("fetch_base", f"unreadable config.json in {repo_dir}: {exc}") from exc
     if not isinstance(raw, dict):
         raise StageError("fetch_base", f"invalid config.json in {repo_dir}")
 

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from frictiontune.config.models import RoleName
+from frictiontune.core.errors import StageError
 from frictiontune.domain.episodes import Episode, RouterDecision
 from frictiontune.domain.friction import (
     FrictionAnalysis,
@@ -195,7 +196,7 @@ class FrictionDetect(Stage):
             if settings.taxonomy_enforcement:
                 try:
                     event = validate_event(event, ctx.config)
-                except Exception:
+                except StageError:
                     invalid += 1
                     ctx.logger.warning(
                         "dropped friction event with invalid taxonomy",

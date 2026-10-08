@@ -50,9 +50,13 @@ def _read_records(path: Path) -> list[dict[str, Any]]:
             line = line.strip()
             if not line:
                 continue
-            row = json.loads(line)
-            if "input_ids" not in row or "labels" not in row:
-                raise StageError("train_sft", f"record {row.get('id')!r} has no input_ids/labels")
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise StageError("train_sft", f"{path}: malformed JSON line: {exc}") from exc
+            if not isinstance(row, dict) or "input_ids" not in row or "labels" not in row:
+                identifier = row.get("id") if isinstance(row, dict) else None
+                raise StageError("train_sft", f"record {identifier!r} has no input_ids/labels")
             records.append({"input_ids": row["input_ids"], "labels": row["labels"]})
     return records
 
