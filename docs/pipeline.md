@@ -174,6 +174,15 @@ are trained or masked is a first-class, configurable policy
 (`include_reasoning_context`, `train_reasoning`). The tokenizer is the base
 model's (HuggingFace) with a deterministic fallback so a CPU box is never blocked.
 
+The assistant mask is applied incrementally: the template is re-rendered over each
+prefix and the newly appended tokens are marked. This is equivalent to
+`apply_chat_template(..., return_assistant_tokens_mask=True)` for prefix-stable
+templates, but works for any model (not only those whose chat template carries the
+`{% generation %}` markers TRL needs) and keeps the assistant turn's end-of-turn
+token inside the trained span, so the model learns to stop as well as to answer. A
+loud check raises if a template is not prefix-stable rather than mis-attaching the
+mask.
+
 ### `curate`
 
 **In:** `judged`, `sft`.
