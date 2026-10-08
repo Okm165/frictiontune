@@ -709,7 +709,7 @@ class EvaluateSimUserSettings(StageSettings):
 
 
 class EvaluateSimUser(Stage):
-    """Drive a simulated user against base and tuned models, counting turns."""
+    """Drive a simulated user against base and tuned models, counting user turns."""
 
     spec = StageSpec(
         name="evaluate_sim_user",
@@ -747,6 +747,9 @@ class EvaluateSimUser(Stage):
     ) -> int:
         sim_role = ctx.config.role(RoleName.USER_SIMULATOR)
         history: list[ChatMessage] = []
+        # Count the simulated user's turns, not the model's replies: the signal is
+        # how much user steering a goal needs, so the assistant response on the
+        # same exchange must not inflate it.
         turns = 0
         for _ in range(settings.max_turns):
             turn: SimulatedUserTurn = await ctx.run.gateway.complete_structured(
@@ -768,7 +771,6 @@ class EvaluateSimUser(Stage):
             history.append(
                 ChatMessage.assistant(clip(response.text, settings.max_generation_chars))
             )
-            turns += 1
         return turns
 
     async def run(self, ctx: StageContext) -> StageResult:
