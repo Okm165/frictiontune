@@ -89,12 +89,34 @@ def _time_split(
     real timestamp, so letting them into the sort would move the boundary and can
     push real work into the held-out evaluation the model was meant to learn
     from. The boundary is a quantile of the *real* records only.
+
+    Records are assigned by their source episode, not one by one: a single
+    episode yields several records (recovery is one per friction event) that
+    share the episode's timestamp and context. Splitting those across the
+    boundary would train the model on the context of an episode it is evaluated
+    on, so every record of an episode falls on the same side.
     """
     ordered = sorted(records, key=lambda record: (meta.get(record.id, ("", 0))[1], record.id))
     generated_records = [record for record in ordered if record.id in generated]
     real_records = [record for record in ordered if record.id not in generated]
+
+    # Group in time order; a group is one source episode. Fall back to the record
+    # id so a missing source can never merge unrelated records.
+    groups: dict[str, list[SFTRecord]] = {}
+    for record in real_records:
+        groups.setdefault(record.source or record.id, []).append(record)
+
     boundary = int(quantile * len(real_records)) if real_records else 0
-    return [*generated_records, *real_records[:boundary]], real_records[boundary:]
+    train_real: list[SFTRecord] = []
+    eval_real: list[SFTRecord] = []
+    assigned = 0
+    for group in groups.values():
+        if assigned < boundary:
+            train_real.extend(group)
+        else:
+            eval_real.extend(group)
+        assigned += len(group)
+    return [*generated_records, *train_real], eval_real
 
 
 def _t2_containment(eval_norm: str, train_norms: list[str]) -> bool:
