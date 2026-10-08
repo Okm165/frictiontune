@@ -196,7 +196,7 @@ class Segment(Stage):
         for session_id, messages in self._group_messages(ctx):
             session_count += 1
             episodes = cut_episodes(session_id, messages)
-            labelled: list[list[Phase]] = await bounded_gather(  # type: ignore[assignment]
+            labelled: list[list[Phase]] = await bounded_gather(
                 lambda episode: self._label_phases(episode, ctx, settings),
                 episodes,
                 limit=settings_min_concurrency(ctx),

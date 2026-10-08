@@ -242,7 +242,7 @@ class FrictionDetect(Stage):
         async def flush() -> None:
             if not batch:
                 return
-            outcomes: list[_EpisodeOutcome] = await bounded_gather(  # type: ignore[assignment]
+            outcomes: list[_EpisodeOutcome] = await bounded_gather(
                 lambda episode: self._process(episode, ctx, settings),
                 batch,
                 limit=concurrency,

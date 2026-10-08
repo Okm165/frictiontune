@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from frictiontune.pipeline.context import StageContext
 
 T = TypeVar("T")
+R = TypeVar("R")
 
 _TRANSCRIPT_QUOTE_LIMIT = 1_500
 
@@ -105,15 +106,15 @@ def analyst_prompt_values(
 
 
 async def bounded_gather(
-    factory: Callable[[T], Awaitable[object]],
+    factory: Callable[[T], Awaitable[R]],
     items: Sequence[T],
     *,
     limit: int,
-) -> list[object]:
+) -> list[R]:
     """Run ``factory(item)`` for every item with at most ``limit`` in flight."""
     semaphore = asyncio.Semaphore(max(1, limit))
 
-    async def _run(item: T) -> object:
+    async def _run(item: T) -> R:
         async with semaphore:
             return await factory(item)
 
