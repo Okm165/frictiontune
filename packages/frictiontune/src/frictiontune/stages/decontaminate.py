@@ -32,7 +32,11 @@ class DecontaminateSettings(StageSettings):
 
     t1_overlap: float = 0.5
     retrieve_k: int = 5
-    retrieval_floor: float = 0.6
+    # A retrieval recall bound only, like curate's: candidates below it are not
+    # shown to the contamination judge. The default admits every positively
+    # correlated neighbour so semantic contamination reaches the judge; raise it
+    # to trade recall for fewer judge calls. It never decides the drop itself.
+    retrieval_floor: float = 0.0
     embed_batch: int = 64
     max_text_chars: int = 20_000
     max_train_ngrams: int = 2_000_000
