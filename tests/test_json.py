@@ -6,7 +6,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 from frictiontune.core.errors import ArtifactError
-from frictiontune.core.json import dumps, iter_jsonl, json_block_validity, loads, try_loads
+from frictiontune.core.json import (
+    dumps,
+    iter_jsonl,
+    json_block_validity,
+    json_blocks,
+    loads,
+    try_loads,
+)
 from frictiontune.llm.parsing import extract_json_object, iter_json_objects
 
 if TYPE_CHECKING:
@@ -105,6 +112,22 @@ def test_json_block_validity_scores_parseable_blocks() -> None:
 def test_json_block_validity_averages_over_blocks() -> None:
     text = '```json\n{"a": 1}\n```\n```json\n{oops}\n```'
     assert json_block_validity(text) == 0.5
+
+
+def test_json_blocks_selects_only_bare_and_json_fences() -> None:
+    text = (
+        "```python\nprint(1)\n```\n"
+        '```\n{"a": 1}\n```\n'
+        '```json\n{"b": 2}\n```\n'
+        "```bash\necho hi\n```"
+    )
+    assert [block.strip() for block in json_blocks(text)] == ['{"a": 1}', '{"b": 2}']
+
+
+def test_json_block_validity_ignores_non_json_fences() -> None:
+    # A python/bash fence is code, not JSON, so it is never "malformed JSON".
+    assert json_block_validity("```python\nprint(1)\n```") == 1.0
+    assert json_block_validity("```python\nprint(1)\n```\n```json\n{oops}\n```") == 0.0
 
 
 def test_iter_jsonl_names_the_corrupt_line(tmp_path: Path) -> None:

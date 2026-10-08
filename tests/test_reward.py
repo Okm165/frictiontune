@@ -27,6 +27,14 @@ def test_tool_score_rewards_parsable_tool_calls() -> None:
     assert _tool_score("```json\n{oops}\n```") == 0.0
 
 
+def test_tool_score_ignores_non_json_fences() -> None:
+    # A code fence is not a tool call: it is neither rewarded nor treated as a
+    # malformed JSON payload.
+    assert _tool_score("```python\nprint(1)\n```") == 0.0
+    mixed = '```python\nprint(1)\n```\n```json\n{"a": 1}\n```'
+    assert _tool_score(mixed) == 1.0
+
+
 def test_reward_composer_requires_a_judge_endpoint() -> None:
     with pytest.raises(ConfigError, match="judge"):
         RewardComposer()

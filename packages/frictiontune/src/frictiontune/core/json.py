@@ -21,12 +21,13 @@ if TYPE_CHECKING:
 
 JsonScalar: TypeAlias = bool | int | float | str | None
 
-# A fenced ```json (...)``` block: the explicit "this is the payload" signal a
-# coding agent emits for a tool call. The content is matched up to the closing
-# fence (not to the first brace), so a nested object is captured whole. Used only
-# to *measure* structural validity (a reward/format term), never to author or
-# repair content.
-_JSON_BLOCK = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+# A fenced block, capturing its info string (the language tag) and body. The
+# body is matched up to the closing fence (not to the first brace), so a nested
+# object is captured whole. Used only to *measure* structural validity (a
+# reward/format term), never to author or repair content. The tag is captured so
+# callers can restrict to bare/``json`` fences: a ``python``/``bash`` block is
+# code, not a JSON payload, and must not be scored as malformed JSON.
+_JSON_FENCE = re.compile(r"```[ \t]*([A-Za-z0-9_+#.-]*)[ \t]*\r?\n?(.*?)```", re.DOTALL)
 
 # A recursive JSON alias. It must be a lazy ``TypeAliasType`` (not an implicit
 # ``list["JsonValue"]`` alias): pydantic resolves field annotations eagerly, and
@@ -107,6 +108,17 @@ def append_jsonl(handle: IO[str], row: Any) -> None:
     handle.flush()
 
 
+def json_blocks(text: str) -> list[str]:
+    """Return the bodies of bare/``json`` fenced blocks in ``text``.
+
+    Non-JSON fences (``python``, ``bash``, …) are excluded: they are code, not a
+    JSON payload, so they can never be "malformed JSON". Callers that must know
+    whether the model emitted a tool call at all use the empty result to score
+    zero rather than one.
+    """
+    return [body for tag, body in _JSON_FENCE.findall(text) if tag.lower() in ("", "json")]
+
+
 def json_block_validity(text: str) -> float:
     """Fraction of fenced JSON blocks in ``text`` that parse.
 
@@ -115,7 +127,7 @@ def json_block_validity(text: str) -> float:
     JSON at all (there is nothing to be malformed). Shared by the replay
     ``format_valid`` signal and the GRPO ``tool`` reward so the two cannot drift.
     """
-    blocks = _JSON_BLOCK.findall(text)
+    blocks = json_blocks(text)
     if not blocks:
         return 1.0
     valid = 0

@@ -24,15 +24,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from frictiontune.core.errors import ConfigError
-from frictiontune.core.json import json_block_validity
+from frictiontune.core.json import json_block_validity, json_blocks
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 _OPEN_MARKER = "<|im_start|>"
 _CLOSE_MARKER = "<|im_end|>"
-
-_FENCE = "```"
 
 
 def _format_score(completion: str, *, max_chars: int) -> float:
@@ -50,11 +48,13 @@ def _format_score(completion: str, *, max_chars: int) -> float:
 def _tool_score(completion: str) -> float:
     """Validity of the tool calls the completion chose to emit.
 
-    A completion that makes no fenced tool call scores zero: this term rewards a
-    well-formed tool-call protocol, and a plain text answer has none. When a
-    fence is present, the score is the fraction of fenced JSON blocks that parse.
+    A completion that makes no fenced JSON tool call scores zero: this term
+    rewards a well-formed tool-call protocol, and a plain text answer has none.
+    When a JSON fence is present, the score is the fraction of those fenced JSON
+    blocks that parse. Non-JSON fences (```python, …) are code, not a tool call,
+    and are ignored.
     """
-    if _FENCE not in completion:
+    if not json_blocks(completion):
         return 0.0
     return json_block_validity(completion)
 
