@@ -22,6 +22,8 @@ from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 from frictiontune.stages.common import clip, render_transcript
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from frictiontune.pipeline.context import StageContext
 
 _DECON_PROMPT = "decontaminate"
@@ -42,9 +44,19 @@ class DecontaminateSettings(StageSettings):
     max_train_ngrams: int = 2_000_000
 
 
-def _meta_index(ctx: StageContext, settings: DecontaminateSettings) -> dict[str, tuple[str, int]]:
-    """Map example id to (rendered text, timestamp) from the judged artifact."""
+def _meta_index(
+    ctx: StageContext, settings: DecontaminateSettings
+) -> tuple[dict[str, tuple[str, int]], set[str]]:
+    """Map example id to (rendered text, timestamp), plus the generated ids.
+
+    Generated examples (synthesized coverage) carry no real timestamp, so they
+    are returned separately: the time split is computed over real work only, and
+    generated examples always train. Otherwise a synthetic backlog would shift
+    the boundary and could push real work into the held-out evaluation the model
+    was meant to learn from.
+    """
     index: dict[str, tuple[str, int]] = {}
+    generated: set[str] = set()
     for example in ctx.catalog.stream("judged", TrainingExample):
         if not example.kept:
             continue
@@ -52,13 +64,35 @@ def _meta_index(ctx: StageContext, settings: DecontaminateSettings) -> dict[str,
         raw_time = example.meta.get("time_created", 0)
         time_created = int(raw_time) if isinstance(raw_time, (int, float)) else 0
         index[example.id] = (clip(text, settings.max_text_chars), time_created)
-    return index
+        if example.meta.get("generated") is True:
+            generated.add(example.id)
+    return index, generated
 
 
 def _t1_overlap(eval_ngrams: set[str], train_ngrams: set[str]) -> float:
     if not eval_ngrams:
         return 0.0
     return len(eval_ngrams & train_ngrams) / len(eval_ngrams)
+
+
+def _time_split(
+    records: Sequence[SFTRecord],
+    meta: Mapping[str, tuple[str, int]],
+    generated: set[str],
+    quantile: float,
+) -> tuple[list[SFTRecord], list[SFTRecord]]:
+    """Split curated records into (train, eval) by a real-work time quantile.
+
+    Generated (synthetic) examples always train and never evaluate: they have no
+    real timestamp, so letting them into the sort would move the boundary and can
+    push real work into the held-out evaluation the model was meant to learn
+    from. The boundary is a quantile of the *real* records only.
+    """
+    ordered = sorted(records, key=lambda record: (meta.get(record.id, ("", 0))[1], record.id))
+    generated_records = [record for record in ordered if record.id in generated]
+    real_records = [record for record in ordered if record.id not in generated]
+    boundary = int(quantile * len(real_records)) if real_records else 0
+    return [*generated_records, *real_records[:boundary]], real_records[boundary:]
 
 
 def _t2_containment(eval_norm: str, train_norms: list[str]) -> bool:
@@ -106,12 +140,11 @@ class Decontaminate(Stage):
         settings = ctx.settings(self.settings_model)
         eval_cfg = ctx.config.evaluation
 
-        meta = _meta_index(ctx, settings)
+        meta, generated = _meta_index(ctx, settings)
         records = list(ctx.catalog.stream("curated", SFTRecord))
-        records.sort(key=lambda record: meta.get(record.id, ("", 0))[1])
-        boundary = int(eval_cfg.time_split_quantile * len(records)) if records else 0
-        train_records = records[:boundary]
-        eval_records = records[boundary:]
+        train_records, eval_records = _time_split(
+            records, meta, generated, eval_cfg.time_split_quantile
+        )
 
         train_texts = [meta.get(record.id, ("", 0))[0] for record in train_records]
         train_norms = [normalize_for_match(text) for text in train_texts]
@@ -166,6 +199,7 @@ class Decontaminate(Stage):
 
         report = {
             "total": len(records),
+            "generated_train": sum(1 for record in train_records if record.id in generated),
             "train": len(train_records),
             "eval": len(surviving),
             "dropped_contaminated": len(dropped),

@@ -135,7 +135,8 @@ declared form/cause, so the taxonomy is self-consistent by construction.
 `EvaluationConfig` controls the trustworthiness of the headline number:
 
 * `time_split_quantile` — where the strict time split falls (default `0.8`); the
-  split is always enforced, so training never sees evaluation-time data.
+  split is enforced over real work, so training never sees evaluation-time data
+  and generated (synthetic) examples always train rather than being held out.
 * `t1_exact_ngram` … `t4_task_level` — which contamination tiers run.
 * `ngram_size` — T1 window size.
 * `seeds` — bootstrap seeds for the dashboard intervals.

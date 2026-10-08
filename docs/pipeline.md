@@ -190,8 +190,11 @@ threshold making the semantic call.
 **Cost:** mixed · medium API.
 
 Makes the friction-drop number trustworthy. The split is a strict **time split**
-(future work is evaluated on, past work is trained on), never random. Four tiers
-then run over the boundary:
+(future work is evaluated on, past work is trained on), never random. The
+boundary is a quantile of the *real* work only; generated (synthetic) examples
+always train and are never held out, so a synthetic backlog cannot move the
+boundary or put taught data into the evaluation. Four tiers then run over the
+boundary:
 
 * **T1** exact n-gram overlap *(plumbing)*
 * **T2** syntactic containment *(plumbing)*
