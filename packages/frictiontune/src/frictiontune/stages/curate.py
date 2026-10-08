@@ -31,7 +31,11 @@ class CurateSettings(StageSettings):
 
     exact_dedup: bool = True
     near_dedup: bool = True
-    retrieval_floor: float = 0.5
+    # A retrieval recall bound only: candidates below it are not shown to the
+    # dedup agent. The default admits every positively-correlated neighbour so
+    # paraphrases reach the agent; raise it to trade recall for fewer agent calls.
+    # It never makes the duplicate decision itself.
+    retrieval_floor: float = 0.0
     retrieve_k: int = 5
     compare_window: int = 64
     embed_batch: int = 64
@@ -128,6 +132,10 @@ class Curate(Stage):
                     continue
                 if verdict.keep == "b":
                     dropped.add(existing_id)
+                    # `index` was the incumbent; the agent prefers the current
+                    # item, so stop comparing later items against the one we are
+                    # about to drop.
+                    kept_indices.remove(index)
                 else:
                     dropped.add(current_id)
                 is_duplicate = True

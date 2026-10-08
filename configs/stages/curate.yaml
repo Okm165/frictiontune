@@ -2,7 +2,7 @@
 # the dedup agent decides).
 exact_dedup: true
 near_dedup: true
-retrieval_floor: 0.5
+retrieval_floor: 0.0
 retrieve_k: 5
 compare_window: 64
 embed_batch: 64
