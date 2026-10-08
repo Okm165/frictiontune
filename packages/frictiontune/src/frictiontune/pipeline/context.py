@@ -105,8 +105,13 @@ class RunContext:
     metrics: dict[str, float] = field(default_factory=dict)
 
     def store(self, stage: str, run_id: str) -> ArtifactStore:
-        """Build the artifact store for one stage invocation."""
-        store = ArtifactStore(self.artifacts_root, stage, run_id)
+        """Build the artifact store for one stage invocation.
+
+        Stages live under ``artifacts/<pipeline>/<stage>/<run_id>`` so a pipeline
+        run is one tree and the CLI (``inspect``/``dashboard``) can find every
+        stage without guessing.
+        """
+        store = ArtifactStore(self.artifacts_root / self.pipeline, stage, run_id)
         store.ensure()
         return store
 

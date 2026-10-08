@@ -29,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from frictiontune.config.models import RoleName
 from frictiontune.core.errors import PromptError
+from frictiontune.core.hashing import content_hash
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -160,6 +161,19 @@ class PromptRegistry:
         )
         self._cache[name] = template
         return template
+
+    def fingerprint(self) -> str:
+        """Hash every prompt and partial file, so editing one changes a run id.
+
+        Prompts are inputs to every LLM stage, but they live in files, not config.
+        Without their contents in the run id, editing a prompt would leave the
+        stage manifest a cache hit and the new prompt would never be used.
+        """
+        prompts = {
+            name: self._dir.joinpath(f"{name}.md").read_text(encoding="utf-8")
+            for name in self.names()
+        }
+        return content_hash({"partials": self.partials(), "prompts": prompts})
 
 
 @lru_cache(maxsize=1)

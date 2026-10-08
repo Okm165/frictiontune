@@ -2,7 +2,7 @@
 
 Layout::
 
-    artifacts/<pipeline>/<run_id>/
+    artifacts/<pipeline>/<stage>/<run_id>/
         manifest.json
         report.md
         data/<name>.jsonl

@@ -109,9 +109,14 @@ class Orchestrator:
         input_hashes = self.run.catalog.hashes(tuple(spec.inputs))
         input_hashes.extend(stage.external_input_hashes(self.run))
 
+        # The run id must change whenever *anything* that affects the stage's
+        # output changes: the whole resolved config (stage settings, role models,
+        # endpoints, temperatures, seeds), the prompt library, and the version.
+        # Hashing only the stage's own block would let an edited prompt or a
+        # changed model silently reuse a stale manifest.
         config_slice = {
-            "stage_config": self.run.config.stages.get(name, {}),
-            "seed": self.run.config.seed,
+            "config": self.run.config.model_dump(mode="json"),
+            "prompts": self.run.gateway.prompt_fingerprint(),
             "version": __version__,
         }
         run_id = compute_run_id(

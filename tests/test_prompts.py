@@ -239,3 +239,21 @@ async def test_structured_call_injects_the_schema_contract() -> None:
     assert [message.role for message in sent] == ["system", "user"]
     assert "JSON Schema" in sent[0].content
     assert "task_adherence" in sent[0].content
+
+
+def test_prompt_fingerprint_is_stable_and_hex() -> None:
+    registry = default_registry()
+
+    first = registry.fingerprint()
+    second = registry.fingerprint()
+
+    assert first == second
+    assert re.fullmatch(r"[0-9a-f]{64}", first)
+
+
+def test_prompt_fingerprint_changes_with_prompt_content() -> None:
+    class _DoctoredRegistry(PromptRegistry):
+        def partials(self) -> dict[str, str]:
+            return {"doctored": "changed text"}
+
+    assert _DoctoredRegistry().fingerprint() != PromptRegistry().fingerprint()

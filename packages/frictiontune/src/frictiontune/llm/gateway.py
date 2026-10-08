@@ -131,6 +131,10 @@ class LlmGateway:
         self._max_repairs = max_repairs
         self._repair_policy = RetryPolicy.immediate(max_repairs + 1)
 
+    def prompt_fingerprint(self) -> str:
+        """Fingerprint of the on-disk prompt library, for run identity."""
+        return self._registry.fingerprint()
+
     async def complete_text(
         self,
         role: RoleName,
