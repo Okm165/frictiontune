@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from openai import AsyncOpenAI
 
@@ -54,7 +54,7 @@ class OpenAiEmbedder:
             if isinstance(cached, list):
                 return [[float(x) for x in row] for row in cached]
 
-        async def _call() -> object:
+        async def _call() -> Any:
             if self._config.dimensions is not None:
                 return await self._client.embeddings.create(
                     model=self._config.model,
@@ -72,8 +72,18 @@ class OpenAiEmbedder:
             )
         except OSError as exc:
             raise LlmError(f"embedding transport failure: {exc}") from exc
+        except Exception as exc:  # provider SDK errors
+            raise LlmError(f"embedding request failed: {exc}") from exc
 
-        vectors = [list(item.embedding) for item in response.data]  # type: ignore[attr-defined]
+        # The API may return embeddings in a different order than the inputs;
+        # ``index`` is the authoritative position. Sorting by it (stable when
+        # absent) keeps every vector aligned with the text that produced it.
+        rows = sorted(response.data, key=lambda item: getattr(item, "index", 0))
+        vectors = [list(item.embedding) for item in rows]
+        if len(vectors) != len(texts):
+            raise LlmError(
+                f"embedding endpoint returned {len(vectors)} vectors for {len(texts)} texts"
+            )
         if self._config.cache:
             self._cache.put("embedding", key, vectors)
         return vectors
