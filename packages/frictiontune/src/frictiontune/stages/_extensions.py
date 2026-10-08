@@ -26,7 +26,12 @@ from frictiontune.domain.dataset import TrainingExample
 from frictiontune.domain.episodes import Episode, ReducedSpan
 from frictiontune.domain.friction import FrictionEvent
 from frictiontune.domain.ids import example_id
-from frictiontune.domain.profiles import Attribution, EventAttribution, PreferenceProfile
+from frictiontune.domain.profiles import (
+    Attribution,
+    BehaviorDimension,
+    EventAttribution,
+    PreferenceProfile,
+)
 from frictiontune.domain.responses import (
     FrictionClusters,
     ReduceSummary,
@@ -72,6 +77,17 @@ def _message(role: str, text: str, *, session_id: str, seq: int) -> Message:
 def _chat_transcript(messages: Sequence[ChatMessage], limit: int = 60_000) -> str:
     lines = [f"{message.role}: {message.content}" for message in messages]
     return clip("\n".join(lines), limit)
+
+
+def _covered_events(clusters: Sequence[BehaviorDimension], known: set[str]) -> int:
+    """Count the distinct known events named by any behaviour cluster.
+
+    An event may be claimed by more than one cluster; coverage is a fraction of
+    the events actually covered, so each event counts once.
+    """
+    return len(
+        {event_id for cluster in clusters for event_id in cluster.event_ids if event_id in known}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -305,12 +321,7 @@ class FrictionCluster(Stage):
                 FrictionClusters,
             )
             known = {event.id for event in events}
-            covered = sum(
-                1
-                for dimension in clusters.clusters
-                for event_id in dimension.event_ids
-                if event_id in known
-            )
+            covered = _covered_events(clusters.clusters, known)
             profile = PreferenceProfile(
                 dimensions=clusters.clusters,
                 total_events=len(events),
