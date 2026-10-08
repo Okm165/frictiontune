@@ -61,34 +61,66 @@ class _EpisodeOutcome:
     invalid: int = 0
 
 
-def _event_key(draft: FrictionEventDraft) -> tuple[str, tuple[int, ...]]:
-    turns = tuple(sorted(span.turn for span in draft.evidence))
-    return (draft.leaf, turns)
+def _evidence_overlap(a: FrictionEventDraft, b: FrictionEventDraft) -> bool:
+    """Whether two drafts cite at least one common transcript turn."""
+    return bool({span.turn for span in a.evidence} & {span.turn for span in b.evidence})
+
+
+def _vote_threshold(passes: int) -> int:
+    """Strict majority of independent passes (2 of 2, 2 of 3, 3 of 4)."""
+    return passes // 2 + 1
 
 
 def _merge_ensemble(
-    drafts: list[FrictionEventDraft], *, threshold: int
-) -> list[FrictionEventDraft]:
-    """Merge draft events across passes, keeping those that reached ``threshold``."""
-    grouped: dict[tuple[str, tuple[int, ...]], list[FrictionEventDraft]] = {}
-    for draft in drafts:
-        grouped.setdefault(_event_key(draft), []).append(draft)
-    merged: list[FrictionEventDraft] = []
-    for group in grouped.values():
-        if len(group) < threshold:
+    passes: list[list[FrictionEventDraft]], *, threshold: int
+) -> list[tuple[FrictionEventDraft, int]]:
+    """Merge per-pass drafts into consensus events and count their votes.
+
+    A consensus event is a cluster of drafts that share a leaf and cite
+    overlapping evidence turns. Overlap-clustering (rather than exact turn-set
+    equality) keeps the same friction found at slightly different turn indices
+    from being double-counted, while distinct events that share a leaf but not
+    their evidence stay separate. A cluster survives only when at least
+    ``threshold`` distinct passes support it; the returned vote count is the
+    number of supporting passes, not merely the number of drafts.
+    """
+    clusters: list[list[tuple[int, FrictionEventDraft]]] = []
+    for pass_index, drafts in enumerate(passes):
+        for draft in drafts:
+            cluster = next(
+                (
+                    candidate
+                    for candidate in clusters
+                    if candidate[0][1].leaf == draft.leaf
+                    and any(_evidence_overlap(draft, member[1]) for member in candidate)
+                ),
+                None,
+            )
+            if cluster is None:
+                clusters.append([(pass_index, draft)])
+            else:
+                cluster.append((pass_index, draft))
+
+    merged: list[tuple[FrictionEventDraft, int]] = []
+    for cluster in clusters:
+        votes = len({pass_index for pass_index, _draft in cluster})
+        if votes < threshold:
             continue
-        best = max(group, key=lambda item: item.confidence)
-        mean_confidence = sum(item.confidence for item in group) / len(group)
+        best = max((draft for _pass, draft in cluster), key=lambda item: item.confidence)
+        mean_confidence = sum(draft.confidence for _pass, draft in cluster) / len(cluster)
         merged.append(
-            FrictionEventDraft(
-                form=best.form,
-                cause=best.cause,
-                cost=best.cost,
-                resolution=best.resolution,
-                leaf=best.leaf,
-                summary=best.summary,
-                evidence=best.evidence,
-                confidence=mean_confidence,
+            (
+                FrictionEventDraft(
+                    form=best.form,
+                    cause=best.cause,
+                    cost=best.cost,
+                    resolution=best.resolution,
+                    leaf=best.leaf,
+                    summary=best.summary,
+                    evidence=best.evidence,
+                    confidence=mean_confidence,
+                ),
+                votes,
             )
         )
     return merged
@@ -142,8 +174,8 @@ class FrictionDetect(Stage):
 
     async def _analyse(
         self, episode: Episode, ctx: StageContext, settings: FrictionDetectSettings
-    ) -> tuple[list[FrictionEventDraft], bool, int]:
-        """Run the analyst (with optional ensemble); return drafts, abstain, passes."""
+    ) -> tuple[list[tuple[FrictionEventDraft, int]], bool]:
+        """Run the analyst (with optional ensemble); return drafts with votes, abstain."""
         role = ctx.config.role(RoleName.FRICTION_ANALYST)
         values = analyst_prompt_values(
             ctx.config,
@@ -162,7 +194,7 @@ class FrictionDetect(Stage):
             analysis = await ctx.run.gateway.complete_structured(
                 RoleName.FRICTION_ANALYST, role, _ANALYST_PROMPT, values, FrictionAnalysis
             )
-            return list(analysis.events), analysis.abstain, 1
+            return [(event, 1) for event in analysis.events], analysis.abstain
 
         sampling = role.model_copy(update={"cache": False})
         results = await asyncio.gather(
@@ -173,9 +205,11 @@ class FrictionDetect(Stage):
                 for _ in range(passes)
             )
         )
-        drafts = [draft for analysis in results for draft in analysis.events]
-        threshold = max(1, round(passes / 2))
-        return _merge_ensemble(drafts, threshold=threshold), any(r.abstain for r in results), passes
+        threshold = _vote_threshold(passes)
+        return (
+            _merge_ensemble([list(result.events) for result in results], threshold=threshold),
+            any(result.abstain for result in results),
+        )
 
     async def _process(
         self, episode: Episode, ctx: StageContext, settings: FrictionDetectSettings
@@ -183,14 +217,14 @@ class FrictionDetect(Stage):
         if not await self._route(episode, ctx, settings):
             return _EpisodeOutcome(episode_id=episode.id, routed_clean=True)
 
-        drafts, abstained, passes = await self._analyse(episode, ctx, settings)
+        drafts, abstained = await self._analyse(episode, ctx, settings)
         events: list[FrictionEvent] = []
         invalid = 0
-        for draft in drafts:
+        for draft, votes in drafts:
             event = FrictionEvent(
                 id=event_id(episode.id, len(events)),
                 episode_id=episode.id,
-                ensemble_votes=passes,
+                ensemble_votes=votes,
                 **draft.model_dump(),
             )
             if settings.taxonomy_enforcement:
