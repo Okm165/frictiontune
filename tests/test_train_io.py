@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import pytest
 from frictiontune.core.errors import StageError
 from frictiontune.stages.fetch_base import probe_base
-from frictiontune_train.sft import _read_records
+from frictiontune_train.sft import _read_records, _select_losses
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -93,3 +93,26 @@ def test_read_records_keeps_only_tokens_and_labels(tmp_path: Path) -> None:
     records = _read_records(path)
 
     assert records == [{"input_ids": [1, 2], "labels": [-100, 2]}]
+
+
+def test_select_losses_prefers_the_aggregate_train_loss() -> None:
+    history = [{"loss": 9.0}, {"loss": 5.0}, {"loss": 2.0}]
+
+    train_loss, final_loss = _select_losses({"train_loss": 3.5}, history)
+
+    assert train_loss == 3.5
+    assert final_loss == 2.0
+
+
+def test_select_losses_falls_back_to_the_last_logged_loss_not_the_first() -> None:
+    history = [{"loss": 9.0}, {"loss": 5.0}, {"loss": 2.0}]
+
+    train_loss, final_loss = _select_losses({}, history)
+
+    # Using the first logged step would report 9.0 and understate convergence.
+    assert train_loss == 2.0
+    assert final_loss == 2.0
+
+
+def test_select_losses_handles_empty_history() -> None:
+    assert _select_losses({}, []) == (0.0, 0.0)

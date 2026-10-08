@@ -61,6 +61,21 @@ def _read_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _select_losses(
+    metrics: dict[str, float], history: Sequence[dict[str, Any]]
+) -> tuple[float, float]:
+    """Return ``(train_loss, final_loss)`` from trainer metrics and log history.
+
+    The trainer's aggregate ``train_loss`` is the mean over the whole run and is
+    preferred. When it is absent, fall back to the *last* logged loss, never the
+    first: the first logged step is not the training loss and reading it as such
+    understates convergence.
+    """
+    final_loss = float(history[-1]["loss"]) if history else 0.0
+    train_loss = float(metrics.get("train_loss", final_loss))
+    return train_loss, final_loss
+
+
 def _collator(pad_token_id: int) -> Any:
     """Build a padding collator that pads labels with ``-100``."""
     torch = require("torch", hint=torch_hint())
@@ -178,10 +193,7 @@ def run_sft(request: TrainingRequest) -> TrainingResult:
         if isinstance(value, (int, float))
     }
     history = [entry for entry in trainer.state.log_history if "loss" in entry]
-    # Prefer the trainer's aggregate loss; the first logged step is not the
-    # training loss and reading it as such understates convergence.
-    train_loss = float(metrics.get("train_loss", history[0]["loss"] if history else 0.0))
-    final_loss = float(history[-1]["loss"]) if history else 0.0
+    train_loss, final_loss = _select_losses(metrics, history)
     checkpoints = sorted(str(path) for path in Path(adapter_dir).glob("checkpoint-*"))
     return TrainingResult(
         adapter_dir=adapter_dir,
