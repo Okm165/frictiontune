@@ -623,8 +623,8 @@ class TrainGrpo(Stage):
         cost=CostProfile(
             compute="gpu", api_usd="medium", human="calibration-slice", maintenance="high"
         ),
-        inputs={"train": "jsonl", "judged": "jsonl", "adapter": "json", "base_probe": "json"},
-        outputs={"grpo_result": "json", "train_grpo_report": "json"},
+        inputs={"judged": "jsonl", "adapter": "json"},
+        outputs={"grpo_result": "json", "grpo_prompts": "jsonl", "train_grpo_report": "json"},
         kill_criterion="Drop if reward hacking appears or SFT already saturates the signals.",
         gated_by=_gated("SFT must plateau first, and the reward must be calibrated"),
     )
