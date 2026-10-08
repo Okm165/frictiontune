@@ -40,7 +40,6 @@ class MineSettings(StageSettings):
     batch_size: int = 32
     max_transcript_chars: int = 100_000
     min_completion_messages: int = 1
-    min_confidence: float = 0.0
 
 
 class Mine(Stage):

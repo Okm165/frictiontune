@@ -156,7 +156,10 @@ class Segment(Stage):
                 {
                     "episode_id": episode.id,
                     "session_id": episode.session_id,
-                    "turn_count": len(assistant_turns),
+                    # Phase indices come from the rendered transcript, which
+                    # numbers every message, so the count must be the transcript
+                    # length, not the assistant-turn count.
+                    "turn_count": count,
                     "transcript": clip(
                         render_transcript(episode.messages),
                         settings.max_phase_transcript_chars,

@@ -1,6 +1,6 @@
 ---
 name: router
-version: "3"
+version: "4"
 role: router
 schema: RouterDecision
 description: >
@@ -45,7 +45,7 @@ Rules:
 Episode metadata:
 - session: {{session_id}}
 - episode: {{episode_id}}
-- assistant turns: {{turn_count}}
+- transcript lines: {{turn_count}}
 - tool calls: {{tool_calls}}
 - tool errors: {{tool_errors}}
 - user turns in this session: {{user_turns}}

@@ -1,6 +1,6 @@
 ---
 name: friction_analyst
-version: "4"
+version: "5"
 role: friction_analyst
 schema: FrictionAnalysis
 description: >
@@ -90,7 +90,7 @@ its own transcript.
 Episode metadata:
 - session: {{session_id}}
 - episode: {{episode_id}}
-- assistant turns: {{turn_count}}
+- transcript lines: {{turn_count}}
 - tool calls: {{tool_calls}}
 - tool errors: {{tool_errors}}
 - compaction events in session: {{compactions}}

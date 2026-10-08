@@ -118,7 +118,6 @@ class FrictionDetect(Stage):
         if not settings.router_enabled:
             return True
         role = ctx.config.role(RoleName.ROUTER)
-        assistant_turns = len(episode.assistant_turns())
         decision = await ctx.run.gateway.complete_structured(
             RoleName.ROUTER,
             role,
@@ -126,7 +125,9 @@ class FrictionDetect(Stage):
             {
                 "session_id": episode.session_id,
                 "episode_id": episode.id,
-                "turn_count": assistant_turns,
+                # The transcript numbers every message; report its length so the
+                # metadata matches the indices the model can cite.
+                "turn_count": len(episode.messages),
                 "tool_calls": episode.features.tool_calls,
                 "tool_errors": episode.features.tool_errors,
                 "user_turns": episode.features.user_turns_in_session,
@@ -147,7 +148,7 @@ class FrictionDetect(Stage):
             ctx.config,
             session_id=episode.session_id,
             episode_id=episode.id,
-            turn_count=len(episode.assistant_turns()),
+            turn_count=len(episode.messages),
             tool_calls=episode.features.tool_calls,
             tool_errors=episode.features.tool_errors,
             compactions=episode.features.compactions,

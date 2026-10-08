@@ -1,8 +1,10 @@
 """Dependency graph of the pipeline.
 
-Edges are declared explicitly and validated against the registry so the graph
-can never drift from the stages that actually exist. A stage with no path from
-``ingest`` cannot run; every core stage can reach ``evaluate_replay``.
+Edges are producer → consumer, derived from the artifacts each stage declares as
+inputs. Where a stage also needs an ordering constraint with no shared artifact
+(the verification and export tails), an explicit sequence edge is added. A stage
+with no path from ``ingest`` cannot run; every core stage can reach
+``evaluate_replay``.
 """
 
 from __future__ import annotations
@@ -37,10 +39,11 @@ CORE_EDGES: Mapping[str, tuple[str, ...]] = {
 # the plan; the CLI orders *all* selected stages with :func:`full_graph`.
 EXTENSION_EDGES: Mapping[str, tuple[str, ...]] = {
     "segment": ("reduce", "raft_srft"),
-    "friction_detect": ("attribute", "friction_cluster"),
+    "friction_detect": ("attribute", "friction_cluster", "raft_srft"),
     "friction_cluster": ("synthesize",),
     "judge": ("synthesize", "train_grpo"),
-    "curate": ("synthesize",),
+    "decontaminate": ("train_grpo",),
+    "fetch_base": ("train_grpo",),
     "train_sft": ("rollout", "evaluate_sim_user", "evaluate_external"),
 }
 

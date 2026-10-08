@@ -1,6 +1,6 @@
 ---
 name: segment_phases
-version: "3"
+version: "4"
 role: friction_analyst
 schema: EpisodePhases
 description: >
@@ -26,14 +26,15 @@ Rules:
 - Phases must be contiguous and cover the whole episode in order.
 - Use the minimum number of phases that keeps each one coherent.
 - Prefer fewer boundaries; do not split mid-objective.
-- `start_turn` and `end_turn` are inclusive turn indices from the transcript.
+- `start_turn` and `end_turn` are inclusive indices into the transcript below,
+  counting every line (user, assistant, and tool) from zero.
 - Keep each `goal` short.
 - {{> untrusted-data }}
 - {{> json-only }}
 :::
 
 :::user
-Episode: {{episode_id}} (session {{session_id}}), {{turn_count}} assistant turns.
+Episode: {{episode_id}} (session {{session_id}}), {{turn_count}} transcript lines.
 
 Transcript (turn_index | role | content):
 {{transcript}}

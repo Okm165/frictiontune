@@ -28,5 +28,4 @@ evaluation:
   t4_task_level: true
   ngram_size: 8
   seeds: [0, 1, 2]
-  lucky_pass_flag: true
   external_corpora: []

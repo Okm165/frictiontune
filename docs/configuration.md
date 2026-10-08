@@ -139,7 +139,6 @@ declared form/cause, so the taxonomy is self-consistent by construction.
 * `t1_exact_ngram` … `t4_task_level` — which contamination tiers run.
 * `ngram_size` — T1 window size.
 * `seeds` — bootstrap seeds for the dashboard intervals.
-* `lucky_pass_flag` — record eval items that only pass due to leakage.
 * `external_corpora` — optional calibration corpora for `evaluate_external`.
 
 ## Per-stage settings (`configs/stages/`)

@@ -120,7 +120,6 @@ class EvaluationConfig(BaseConfigModel):
     t4_task_level: bool = True
     ngram_size: int = Field(default=8, ge=1)
     seeds: list[int] = Field(default_factory=lambda: [0, 1, 2])
-    lucky_pass_flag: bool = True
     external_corpora: list[str] = Field(default_factory=list)
 
 
