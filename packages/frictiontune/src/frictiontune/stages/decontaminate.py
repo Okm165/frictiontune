@@ -119,26 +119,37 @@ class Decontaminate(Stage):
 
         dropped: list[str] = []
         reasons: dict[str, str] = {}
+        semantic_enabled = eval_cfg.t3_semantic or eval_cfg.t4_task_level
+        flagged_tier = eval_cfg.t1_exact_ngram or eval_cfg.t2_syntactic
 
-        surviving: list[SFTRecord] = []
+        # The deterministic tiers MEASURE leak evidence; the agent decides whether
+        # it is contamination. Nothing is dropped here.
+        audit: list[tuple[SFTRecord, str, float, bool]] = []
         for record in eval_records:
             text = meta.get(record.id, ("", 0))[0]
-            if eval_cfg.t1_exact_ngram:
-                overlap = _t1_overlap(word_ngram_set(text, eval_cfg.ngram_size), train_ngrams)
-                if overlap >= settings.t1_overlap:
-                    dropped.append(record.id)
-                    reasons[record.id] = f"t1-ngram:{overlap:.2f}"
-                    continue
-            if eval_cfg.t2_syntactic and _t2_containment(normalize_for_match(text), train_norms):
-                dropped.append(record.id)
-                reasons[record.id] = "t2-syntactic"
-                continue
-            surviving.append(record)
-
-        if eval_cfg.t3_semantic or eval_cfg.t4_task_level:
-            surviving = await self._semantic_pass(
-                surviving, train_texts, meta, settings, ctx, dropped, reasons
+            overlap = (
+                _t1_overlap(word_ngram_set(text, eval_cfg.ngram_size), train_ngrams)
+                if eval_cfg.t1_exact_ngram
+                else 0.0
             )
+            contained = eval_cfg.t2_syntactic and _t2_containment(
+                normalize_for_match(text), train_norms
+            )
+            audit.append((record, text, overlap, contained))
+
+        if semantic_enabled or flagged_tier:
+            surviving = await self._agent_decide(
+                audit,
+                train_texts,
+                train_norms,
+                settings,
+                ctx,
+                dropped,
+                reasons,
+                semantic_enabled=semantic_enabled,
+            )
+        else:
+            surviving = [record for record, *_ in audit]
 
         train_sink = ctx.jsonl_sink("train")
         for record in train_records:
@@ -176,49 +187,104 @@ class Decontaminate(Stage):
             },
         )
 
-    async def _semantic_pass(
+    async def _agent_decide(
         self,
-        surviving: list[SFTRecord],
+        audit: list[tuple[SFTRecord, str, float, bool]],
         train_texts: list[str],
-        meta: dict[str, tuple[str, int]],
+        train_norms: list[str],
         settings: DecontaminateSettings,
         ctx: StageContext,
         dropped: list[str],
         reasons: dict[str, str],
+        *,
+        semantic_enabled: bool,
     ) -> list[SFTRecord]:
-        """Run embedding retrieval + agent judgement over surviving eval items."""
-        if not surviving or not train_texts:
-            return surviving
+        """Ask the agent whether each flagged or semantically-nearest eval item leaks.
+
+        The deterministic tiers only *retrieve and measure*; the drop is the
+        agent's call. Embeddings retrieve the nearest training examples, and T2
+        containment contributes the specific containing text. Only when an eval
+        item is deterministically flagged and no candidate text can be retrieved
+        (no embedder) do we fall back to dropping, because training on a leak is
+        worse than losing an eval item.
+        """
+        if not audit:
+            return []
         try:
             embedder = ctx.run.backends.embedder()
         except BackendUnavailableError:
-            return surviving
+            ctx.logger.warning(
+                "no embedder: deterministic leak signals will drop without agent review"
+            )
+            embedder = None
 
         train_vectors: list[list[float]] = []
-        for start in range(0, len(train_texts), settings.embed_batch):
-            train_vectors.extend(
-                await embedder.embed(train_texts[start : start + settings.embed_batch])
-            )
+        if embedder is not None and train_texts:
+            for start in range(0, len(train_texts), settings.embed_batch):
+                train_vectors.extend(
+                    await embedder.embed(train_texts[start : start + settings.embed_batch])
+                )
 
         kept: list[SFTRecord] = []
-        for record in surviving:
-            text = meta.get(record.id, ("", 0))[0]
-            vector = (await embedder.embed([text]))[0]
-            scored = sorted(
-                (
-                    (cosine(vector, train_vector), index)
-                    for index, train_vector in enumerate(train_vectors)
-                ),
-                reverse=True,
-            )
-            candidates = [
-                train_texts[index]
-                for score, index in scored[: settings.retrieve_k]
-                if score >= settings.retrieval_floor
-            ]
-            if candidates and await self._semantic_check(text, candidates, ctx):
+        for record, text, overlap, contained in audit:
+            flagged = contained or overlap >= settings.t1_overlap
+            if not flagged and not semantic_enabled:
+                kept.append(record)
+                continue
+
+            candidates: list[str] = []
+            if embedder is not None and train_vectors:
+                vector = (await embedder.embed([text]))[0]
+                scored = sorted(
+                    (
+                        (cosine(vector, train_vector), index)
+                        for index, train_vector in enumerate(train_vectors)
+                    ),
+                    reverse=True,
+                )
+                candidates = [
+                    train_texts[index]
+                    for score, index in scored[: settings.retrieve_k]
+                    if score >= settings.retrieval_floor
+                ]
+            if contained:
+                candidates = _dedupe(candidates + _containing(train_norms, train_texts, text))
+
+            if not candidates:
+                if flagged:
+                    dropped.append(record.id)
+                    reasons[record.id] = "t2-syntactic" if contained else f"t1-ngram:{overlap:.2f}"
+                else:
+                    kept.append(record)
+                continue
+
+            if await self._semantic_check(text, candidates[: settings.retrieve_k], ctx):
                 dropped.append(record.id)
                 reasons[record.id] = "t3/t4-semantic"
                 continue
             kept.append(record)
         return kept
+
+
+def _containing(train_norms: list[str], train_texts: list[str], text: str) -> list[str]:
+    """Return train texts whose normalized form contains (or is contained by) the eval text."""
+    normalized = normalize_for_match(text)
+    if not normalized:
+        return []
+    return [
+        train_texts[index]
+        for index, norm in enumerate(train_norms)
+        if norm and (normalized in norm or norm in normalized)
+    ]
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    """Deduplicate while preserving order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
