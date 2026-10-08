@@ -12,6 +12,7 @@ from itertools import groupby
 from typing import TYPE_CHECKING
 
 from frictiontune.config.models import RoleName
+from frictiontune.core.errors import StageError
 from frictiontune.domain.episodes import Episode, EpisodeFeatures, EpisodePhases, Phase, PhaseDraft
 from frictiontune.domain.ids import episode_id, phase_id
 from frictiontune.domain.trace import Message, ToolPart
@@ -190,8 +191,24 @@ class Segment(Stage):
         ]
 
     def _group_messages(self, ctx: StageContext) -> Iterator[tuple[str, list[Message]]]:
+        """Yield each session's messages, asserting sessions are contiguous.
+
+        ``itertools.groupby`` only groups *consecutive* equal keys, so this
+        depends on the messages artifact listing each session's messages together
+        (which ingest and normalize both preserve). If a session id reappears
+        after another session, a silent split would change the episode unit — the
+        core of the whole pipeline — so it is a hard error instead.
+        """
         stream = ctx.catalog.stream("messages", Message)
+        seen: set[str] = set()
         for session_id, group in groupby(stream, key=lambda message: message.session_id):
+            if session_id in seen:
+                raise StageError(
+                    "segment",
+                    f"messages for session {session_id!r} are not contiguous; the "
+                    "messages artifact must list each session's messages together",
+                )
+            seen.add(session_id)
             yield session_id, list(group)
 
     async def run(self, ctx: StageContext) -> StageResult:
