@@ -31,7 +31,10 @@ def _read_prompts(path: Path) -> list[str]:
             line = line.strip()
             if not line:
                 continue
-            row = json.loads(line)
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise StageError("train_grpo", f"{path}: malformed JSON line: {exc}") from exc
             prompt = row.get("prompt") if isinstance(row, dict) else None
             if isinstance(prompt, str) and prompt:
                 prompts.append(prompt)

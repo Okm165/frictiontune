@@ -59,7 +59,12 @@ class HttpRolloutBackend:
             response = await with_retry(
                 _post, policy=RetryPolicy(), retry_on=is_transport_retryable
             )
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise BackendUnavailableError(
+                    "rollout", "runner returned a non-JSON payload"
+                ) from exc
         return self._parse(payload)
 
     def _parse(self, payload: object) -> RolloutResult:

@@ -100,7 +100,12 @@ class RewardComposer:
             return response
 
         response = with_retry(_post, policy=RetryPolicy(), retry_on=is_transport_retryable)
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            # A judge that answers with prose or an error page must not abort
+            # the whole training run; an unparseable reply scores zero.
+            return 0.0
         if isinstance(payload, dict) and isinstance(payload.get("score"), (int, float)):
             return float(payload["score"])
         return 0.0
