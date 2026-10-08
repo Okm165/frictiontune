@@ -2,7 +2,7 @@
 
 Export is where a silent regression can slip in (a bad merge produces a model
 that loads but answers differently). The parity probe compares greedy outputs
-from the base model and the exported model on a small prompt set, so any
+from the adapter model and its merged form on a small prompt set, so any
 divergence is recorded in the run artifacts rather than discovered in
 production.
 """
@@ -71,19 +71,22 @@ class LocalServingBackend:
         peft = require("peft", hint=torch_hint())
         tokenizer = load_tokenizer(request.base_model)
         base = load_transformers_base(request.base_model, full_precision_hardware())
-        base_outputs = (
-            [_generate(base, tokenizer, probe.prompt) for probe in request.probe]
+        loaded = peft.PeftModel.from_pretrained(base, request.adapter_dir)
+        # Parity is between the adapter model and its merged form, both of which
+        # carry the adapter. The bare base model is NOT a valid reference: it has
+        # no adapter, so every probe would "mismatch" by construction.
+        reference_outputs = (
+            [_generate(loaded, tokenizer, probe.prompt) for probe in request.probe]
             if request.probe
             else []
         )
-        loaded = peft.PeftModel.from_pretrained(base, request.adapter_dir)
         model = loaded.merge_and_unload()
         model.save_pretrained(str(served_dir))
         tokenizer.save_pretrained(str(served_dir))
 
         mismatches: list[str] = []
         matches = 0
-        for probe, reference in zip(request.probe, base_outputs, strict=False):
+        for probe, reference in zip(request.probe, reference_outputs, strict=False):
             expected = probe.expected if probe.expected is not None else reference
             if _generate(model, tokenizer, probe.prompt) == expected:
                 matches += 1

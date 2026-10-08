@@ -36,6 +36,7 @@ class Signal(BaseModel):
     direction: Direction
     n: int
     improved: bool
+    significant: bool = False
 
 
 class ReplayDashboard(BaseModel):
@@ -87,6 +88,9 @@ def make_signal(
     deltas = [t - b for b, t in zip(baseline_values, tuned_values, strict=True)]
     ci_low, ci_high = bootstrap_ci(deltas, seed=seed)
     delta = mean(deltas)
+    # A movement is only significant when the bootstrap interval for the paired
+    # deltas excludes zero; `improved` alone just reads the sign of the mean.
+    significant = (ci_low > 0.0 and ci_high > 0.0) or (ci_low < 0.0 and ci_high < 0.0)
     return Signal(
         name=name,
         baseline=mean(baseline_values),
@@ -97,6 +101,7 @@ def make_signal(
         direction=direction,
         n=len(deltas),
         improved=_improved(delta, direction),
+        significant=significant,
     )
 
 

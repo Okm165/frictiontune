@@ -119,13 +119,14 @@ def render_dashboard(dashboard: ReplayDashboard) -> str:
             f"{signal.delta:+.3f}",
             f"[{signal.ci_low:+.3f}, {signal.ci_high:+.3f}]",
             "yes" if signal.improved else "no",
+            "yes" if signal.significant else "no",
             signal.n,
         ]
         for signal in dashboard.signals
     ]
     lines.append(
         _table(
-            ["signal", "baseline", "tuned", "delta", "95% CI", "improved", "n"],
+            ["signal", "baseline", "tuned", "delta", "95% CI", "improved", "significant", "n"],
             rows,
         )
     )

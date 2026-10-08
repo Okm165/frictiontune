@@ -61,3 +61,17 @@ def test_dashboard_without_primary_signal_is_zero() -> None:
 
     assert dashboard.friction_drop == 0.0
     assert dashboard.signal("tool_errors") is not None
+
+
+def test_signal_is_significant_when_the_interval_excludes_zero() -> None:
+    signal = make_signal("user_corrections", [3, 4, 5], [1, 2, 3], direction="lower_better")
+
+    assert signal.improved
+    assert signal.significant
+
+
+def test_signal_is_not_significant_when_the_interval_crosses_zero() -> None:
+    # Deltas of +5 and -5: the mean is zero and the interval spans it.
+    signal = make_signal("noisy", [0.0, 10.0], [5.0, 5.0], direction="lower_better")
+
+    assert not signal.significant

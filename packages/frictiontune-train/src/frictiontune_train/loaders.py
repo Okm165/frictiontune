@@ -94,6 +94,14 @@ def apply_lora(
         model = peft.prepare_model_for_kbit_training(
             model, use_gradient_checkpointing=hardware.gradient_checkpointing
         )
+    elif hardware.gradient_checkpointing:
+        # The kbit helper enables checkpointing and input grads for quantised
+        # models; a bf16/fp16 model needs both done explicitly or the first
+        # backward pass fails on inputs that do not require grad.
+        if hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_enable()
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
     config = peft.LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,

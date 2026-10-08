@@ -1,8 +1,9 @@
-"""GRPO training with a composed, anti-hacking reward.
+"""GRPO training with a judged reward.
 
-This runs after SFT has plateaued and only when the reward has been calibrated.
-It reuses the same loader as SFT, continues from the SFT adapter when one is
-given, and optimises the reward defined in :mod:`frictiontune_train.reward`.
+This runs after SFT has plateaued and only when the reward has been calibrated:
+a judge endpoint is required so the reward is not a constant. It reuses the same
+loader as SFT, continues from the SFT adapter when one is given, and optimises
+the reward defined in :mod:`frictiontune_train.reward`.
 """
 
 from __future__ import annotations

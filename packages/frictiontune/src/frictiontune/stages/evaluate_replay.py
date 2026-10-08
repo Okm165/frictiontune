@@ -145,7 +145,13 @@ class EvaluateReplay(Stage):
         ctx: StageContext,
         settings: EvaluateReplaySettings,
     ) -> JudgeVerdict:
-        role = ctx.config.role(RoleName.JUDGE)
+        try:
+            role = ctx.config.role(RoleName.JUDGE)
+        except KeyError as exc:
+            raise StageError("evaluate_replay", "the judge role is not configured") from exc
+        # Pin the judge to greedy decoding: a sampled judge would add noise to
+        # the very comparison it is meant to measure.
+        role = role.model_copy(update={"temperature": 0.0, "cache": True})
         return await ctx.run.gateway.complete_structured(
             RoleName.JUDGE,
             role,
@@ -233,7 +239,7 @@ class EvaluateReplay(Stage):
         ctx.emit_jsonl(
             "replay",
             [
-                {"id": example.id, "seed_count": len(seeds), **entry}
+                {"id": example.id, "seed_count": len(sampling_seeds), **entry}
                 for example, entry in zip(examples, results, strict=True)
             ],
         )

@@ -6,11 +6,14 @@ be inspected in the run report.
 
 Components:
 
-* ``judge`` — an optional remote LLM/judge score, if an endpoint is configured.
+* ``judge`` — a required remote LLM/judge score. A judge endpoint must be
+  configured: without one the remaining terms are constant for well-formed text
+  and GRPO would optimise nothing. Refusing to run is better than a silent no-op.
 * ``format`` — deterministic plumbing: the completion is well-formed and not
   degenerate (empty, runaway length).
-* ``tool`` — deterministic plumbing: any fenced JSON tool calls parse.
-* ``anti_hack`` — deterministic guards: length band and low self-repetition.
+* ``tool`` — deterministic plumbing: the fenced JSON tool calls parse. A
+  completion that makes no tool call scores zero on this term; it measures the
+  tool-call protocol, not meaning.
 
 Only the judge component makes a semantic call; the rest are parser/validator
 checks, consistent with the project's "LLM judges, deterministic plumbing" rule.
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from frictiontune.core.errors import ConfigError
 from frictiontune.core.json import json_block_validity
 
 if TYPE_CHECKING:
@@ -27,6 +31,8 @@ if TYPE_CHECKING:
 
 _OPEN_MARKER = "<|im_start|>"
 _CLOSE_MARKER = "<|im_end|>"
+
+_FENCE = "```"
 
 
 def _format_score(completion: str, *, max_chars: int) -> float:
@@ -42,30 +48,19 @@ def _format_score(completion: str, *, max_chars: int) -> float:
 
 
 def _tool_score(completion: str) -> float:
-    """Fraction of fenced JSON blocks that parse; 1.0 when there are none."""
+    """Validity of the tool calls the completion chose to emit.
+
+    A completion that makes no fenced tool call scores zero: this term rewards a
+    well-formed tool-call protocol, and a plain text answer has none. When a
+    fence is present, the score is the fraction of fenced JSON blocks that parse.
+    """
+    if _FENCE not in completion:
+        return 0.0
     return json_block_validity(completion)
 
 
-def _anti_hack_score(completion: str, prompt: str) -> float:
-    """Penalise copying and runaway repetition."""
-    text = completion.strip()
-    prompt_words = set(prompt.split())
-    words = text.split()
-    if not words:
-        return 0.0
-    copied = sum(1 for word in words if word in prompt_words)
-    copy_ratio = copied / len(words)
-    distinct = len(set(words)) / len(words)
-    score = 1.0
-    if copy_ratio > 0.9:
-        score -= 0.5
-    if distinct < 0.2:
-        score -= 0.5
-    return max(0.0, score)
-
-
 class RewardComposer:
-    """A callable GRPO reward combining judge, format, tool, and anti-hack terms."""
+    """A callable GRPO reward combining a required judge with format/tool terms."""
 
     def __init__(
         self,
@@ -75,16 +70,20 @@ class RewardComposer:
         judge_timeout_s: float = 30.0,
         max_chars: int = 40_000,
     ) -> None:
-        """Initialise the composer with weights and an optional judge endpoint."""
-        self._weights = weights or {"judge": 1.0, "format": 0.5, "tool": 0.5, "anti_hack": 0.25}
+        """Initialise the composer; a judge endpoint is required."""
+        if not judge_url:
+            raise ConfigError(
+                "GRPO reward requires a judge endpoint; set "
+                "FRICTIONTUNE_GRPO_JUDGE_URL so the reward makes a semantic "
+                "judgement instead of a constant that optimises nothing"
+            )
+        self._weights = weights or {"judge": 1.0, "format": 0.5, "tool": 0.5}
         self._judge_url = judge_url
         self._judge_timeout = judge_timeout_s
         self._max_chars = max_chars
 
     def _judge(self, prompt: str, completion: str) -> float:
-        """Query an optional remote judge endpoint; 0.0 when unconfigured."""
-        if not self._judge_url:
-            return 0.0
+        """Query the judge endpoint; an unparseable reply scores 0.0."""
         import httpx
         from frictiontune.core.retry import RetryPolicy, with_retry
         from frictiontune.llm.transport import TRANSPORT_RETRYABLE
@@ -116,9 +115,9 @@ class RewardComposer:
                 completion, max_chars=self._max_chars
             )
             total += self._weights.get("tool", 0.0) * _tool_score(completion)
-            total += self._weights.get("anti_hack", 0.0) * _anti_hack_score(completion, prompt)
-            if self._judge_url:
-                total += self._weights.get("judge", 0.0) * self._judge(prompt, completion)
+            judge_weight = self._weights.get("judge", 0.0)
+            if judge_weight:
+                total += judge_weight * self._judge(prompt, completion)
             scores.append(total)
         return scores
 
