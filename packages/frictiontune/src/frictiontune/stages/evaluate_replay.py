@@ -12,7 +12,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from frictiontune.config.models import LlmRoleConfig, RoleName
-from frictiontune.core.errors import StageError
+from frictiontune.core.errors import ConfigError, StageError
 from frictiontune.core.json import json_block_validity
 from frictiontune.domain.dataset import SFTRecord, TrainingExample
 from frictiontune.domain.responses import JudgeVerdict
@@ -114,7 +114,7 @@ class EvaluateReplay(Stage):
     ) -> LlmRoleConfig:
         try:
             base = ctx.config.role(role)
-        except KeyError as exc:
+        except ConfigError as exc:
             raise StageError(
                 "evaluate_replay",
                 f"role {role.value!r} is not configured; serve the adapter and add the role",
@@ -149,7 +149,7 @@ class EvaluateReplay(Stage):
     ) -> JudgeVerdict:
         try:
             role = ctx.config.role(RoleName.JUDGE)
-        except KeyError as exc:
+        except ConfigError as exc:
             raise StageError("evaluate_replay", "the judge role is not configured") from exc
         # Pin the judge to greedy decoding: a sampled judge would add noise to
         # the very comparison it is meant to measure.

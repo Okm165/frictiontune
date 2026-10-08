@@ -20,7 +20,7 @@ from frictiontune.backends.models import (
     TrainingResult,
 )
 from frictiontune.config.models import LlmRoleConfig, RoleName
-from frictiontune.core.errors import StageError
+from frictiontune.core.errors import ConfigError, StageError
 from frictiontune.core.hashing import file_sha256
 from frictiontune.domain.dataset import TrainingExample
 from frictiontune.domain.episodes import Episode, ReducedSpan
@@ -733,7 +733,7 @@ class EvaluateSimUser(Stage):
     def _role(self, ctx: StageContext, role: RoleName, temperature: float) -> LlmRoleConfig:
         try:
             base = ctx.config.role(role)
-        except KeyError as exc:
+        except ConfigError as exc:
             raise StageError("evaluate_sim_user", f"role {role.value!r} is not configured") from exc
         return base.model_copy(update={"temperature": temperature, "cache": False})
 
