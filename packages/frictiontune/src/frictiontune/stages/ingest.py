@@ -1,9 +1,9 @@
 """``ingest`` — read the source corpus into canonical, streamed messages.
 
 Read-only and immutable: a live agent session is never disturbed. Messages are
-streamed session-by-session into JSONL through a generator, and the compact
-session index is written through a sink in the same pass, so the process never
-holds a whole session's messages in memory.
+written session-by-session into JSONL through a generator, and the compact
+session index is written through a sink in the same pass, so the process holds
+only one session's messages at a time rather than the whole corpus.
 """
 
 from __future__ import annotations
