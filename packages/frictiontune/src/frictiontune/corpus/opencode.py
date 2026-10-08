@@ -171,9 +171,13 @@ def _parse_user_parts(data: dict[str, Any]) -> list[Part]:
     if isinstance(files, list):
         for item in files:
             if isinstance(item, dict):
+                # Stored file attachments carry a name, a uri, and a mime type
+                # rather than a path; prefer the most human-readable identifier so
+                # an attachment never degrades to the literal "file".
+                reference = item.get("name") or item.get("uri") or item.get("mime") or "file"
                 parts.append(
                     FileRefPart(
-                        path=str(item.get("path") or item.get("name") or "file"),
+                        path=str(reference),
                         description=str(item.get("description") or ""),
                     )
                 )
@@ -225,13 +229,17 @@ def _message_from_row(row: sqlite3.Row, index: int) -> tuple[Message, int, int] 
         return message, 0, 0
 
     if kind == "compaction":
+        # The stored compaction message carries the generated `summary` (and the
+        # retained `recent` tail), not a `text` field; reading `text` alone would
+        # silently drop the session summary from the transcript.
+        summary = data.get("summary") or data.get("text") or data.get("recent") or ""
         message = Message(
             id=str(row["id"]),
             session_id=session_id,
             seq=index,
             role="system",
             time_created=time_created,
-            parts=[CompactionPart(text=str(data.get("text") or ""))],
+            parts=[CompactionPart(text=str(summary))],
             raw=data,
         )
         return message, 0, 0
