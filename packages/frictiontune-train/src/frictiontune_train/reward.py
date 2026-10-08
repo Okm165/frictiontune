@@ -86,7 +86,7 @@ class RewardComposer:
         """Query the judge endpoint; an unparseable reply scores 0.0."""
         import httpx
         from frictiontune.core.retry import RetryPolicy, with_retry
-        from frictiontune.llm.transport import TRANSPORT_RETRYABLE
+        from frictiontune.llm.transport import is_transport_retryable
 
         url = self._judge_url
 
@@ -99,7 +99,7 @@ class RewardComposer:
             response.raise_for_status()
             return response
 
-        response = with_retry(_post, policy=RetryPolicy(), retry_on=TRANSPORT_RETRYABLE)
+        response = with_retry(_post, policy=RetryPolicy(), retry_on=is_transport_retryable)
         payload = response.json()
         if isinstance(payload, dict) and isinstance(payload.get("score"), (int, float)):
             return float(payload["score"])

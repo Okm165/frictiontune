@@ -17,7 +17,7 @@ from frictiontune.core.errors import StageError
 from frictiontune.core.logging import get_logger
 from frictiontune.core.retry import RetryPolicy, with_retry
 from frictiontune.domain.base import BaseProbe
-from frictiontune.llm.transport import TRANSPORT_RETRYABLE
+from frictiontune.llm.transport import is_transport_retryable
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 
@@ -170,7 +170,7 @@ class FetchBase(Stage):
             await with_retry(
                 _download,
                 policy=RetryPolicy(max_attempts=3),
-                retry_on=TRANSPORT_RETRYABLE,
+                retry_on=is_transport_retryable,
                 logger=_log,
             )
 

@@ -21,6 +21,7 @@ from tenacity import (
     AsyncRetrying,
     RetryCallState,
     Retrying,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential_jitter,
@@ -28,6 +29,10 @@ from tenacity import (
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+    # A retry selector: a tuple of exception types, or a predicate over the
+    # exception for cases (HTTP status codes) a type tuple cannot express.
+    RetryOn = tuple[type[BaseException], ...] | Callable[[BaseException], bool]
 
 T = TypeVar("T")
 
@@ -91,14 +96,16 @@ def _log_retry(*, logger: object | None, retry_state: RetryCallState) -> None:
 
 def _attempt_kwargs(
     active: RetryPolicy,
-    retry_on: tuple[type[BaseException], ...],
+    retry_on: RetryOn,
     logger: object | None,
 ) -> dict[str, Any]:
     """The tenacity configuration shared by the sync and async paths."""
     return {
         "stop": stop_after_attempt(active.max_attempts),
         "wait": active.wait(),
-        "retry": retry_if_exception_type(retry_on),
+        "retry": retry_if_exception(retry_on)
+        if callable(retry_on)
+        else retry_if_exception_type(retry_on),
         "reraise": True,
         "before_sleep": lambda state: _log_retry(logger=logger, retry_state=state),
     }
@@ -107,7 +114,7 @@ def _attempt_kwargs(
 async def _retry_async(
     operation: Callable[[], Awaitable[T]],
     active: RetryPolicy,
-    retry_on: tuple[type[BaseException], ...],
+    retry_on: RetryOn,
     logger: object | None,
 ) -> T:
     async for attempt in AsyncRetrying(**_attempt_kwargs(active, retry_on, logger)):
@@ -119,7 +126,7 @@ async def _retry_async(
 def _retry_sync(
     operation: Callable[[], T],
     active: RetryPolicy,
-    retry_on: tuple[type[BaseException], ...],
+    retry_on: RetryOn,
     logger: object | None,
 ) -> T:
     for attempt in Retrying(**_attempt_kwargs(active, retry_on, logger)):
@@ -133,7 +140,7 @@ async def with_retry(
     operation: Callable[[], Awaitable[T]],
     *,
     policy: RetryPolicy | None = ...,
-    retry_on: tuple[type[BaseException], ...] = ...,
+    retry_on: RetryOn = ...,
     logger: object | None = ...,
 ) -> T: ...
 
@@ -143,7 +150,7 @@ def with_retry(
     operation: Callable[[], T],
     *,
     policy: RetryPolicy | None = ...,
-    retry_on: tuple[type[BaseException], ...] = ...,
+    retry_on: RetryOn = ...,
     logger: object | None = ...,
 ) -> T: ...
 
@@ -152,7 +159,7 @@ def with_retry(
     operation: Callable[[], Any],
     *,
     policy: RetryPolicy | None = None,
-    retry_on: tuple[type[BaseException], ...] = RETRYABLE,
+    retry_on: RetryOn = RETRYABLE,
     logger: object | None = None,
 ) -> Any:
     """Run ``operation`` with the shared retry policy.
@@ -160,7 +167,8 @@ def with_retry(
     ``operation`` is a zero-argument factory so each attempt starts fresh
     (important for HTTP clients and generators). It may be synchronous or a
     coroutine function; the matching execution model is used, so the one retry
-    definition serves every caller.
+    definition serves every caller. ``retry_on`` is either a tuple of exception
+    types or a predicate over the exception, for status-code-aware retries.
     """
     active = policy or RetryPolicy()
     if inspect.iscoroutinefunction(operation):

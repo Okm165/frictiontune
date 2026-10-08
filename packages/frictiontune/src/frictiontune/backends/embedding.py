@@ -10,7 +10,7 @@ from openai import AsyncOpenAI
 from frictiontune.core.errors import LlmError
 from frictiontune.core.hashing import content_hash
 from frictiontune.core.retry import RetryPolicy, with_retry
-from frictiontune.llm.transport import TRANSPORT_RETRYABLE
+from frictiontune.llm.transport import is_transport_retryable
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -67,7 +67,9 @@ class OpenAiEmbedder:
             )
 
         try:
-            response = await with_retry(_call, policy=RetryPolicy(), retry_on=TRANSPORT_RETRYABLE)
+            response = await with_retry(
+                _call, policy=RetryPolicy(), retry_on=is_transport_retryable
+            )
         except OSError as exc:
             raise LlmError(f"embedding transport failure: {exc}") from exc
 

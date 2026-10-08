@@ -101,6 +101,50 @@ def test_immediate_policy_retries_without_backoff() -> None:
     assert policy.jitter_s == 0.0
 
 
+def test_with_retry_accepts_an_exception_predicate() -> None:
+    attempts = 0
+
+    def predicate(exc: BaseException) -> bool:
+        return isinstance(exc, ValueError)
+
+    def flaky() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise ValueError("transient")
+        return "ok"
+
+    result = with_retry(
+        flaky,
+        policy=RetryPolicy(max_attempts=4, initial_delay_s=0.0, jitter_s=0.0),
+        retry_on=predicate,
+    )
+
+    assert result == "ok"
+    assert attempts == 3
+
+
+def test_with_retry_predicate_does_not_retry_unmatched() -> None:
+    attempts = 0
+
+    def predicate(exc: BaseException) -> bool:
+        return isinstance(exc, ValueError)
+
+    def fails() -> str:
+        nonlocal attempts
+        attempts += 1
+        raise KeyError("permanent")
+
+    with pytest.raises(KeyError):
+        with_retry(
+            fails,
+            policy=RetryPolicy(max_attempts=4, initial_delay_s=0.0, jitter_s=0.0),
+            retry_on=predicate,
+        )
+
+    assert attempts == 1
+
+
 def test_tenacity_is_confined_to_the_retry_module() -> None:
     root = Path(frictiontune.__file__).parent
 

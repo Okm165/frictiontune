@@ -41,7 +41,7 @@ class HttpRolloutBackend:
             )
         import httpx
         from frictiontune.core.retry import RetryPolicy, with_retry
-        from frictiontune.llm.transport import TRANSPORT_RETRYABLE
+        from frictiontune.llm.transport import is_transport_retryable
 
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         url = self._url
@@ -56,7 +56,9 @@ class HttpRolloutBackend:
                 response.raise_for_status()
                 return response
 
-            response = await with_retry(_post, policy=RetryPolicy(), retry_on=TRANSPORT_RETRYABLE)
+            response = await with_retry(
+                _post, policy=RetryPolicy(), retry_on=is_transport_retryable
+            )
             payload = response.json()
         return self._parse(payload)
 
