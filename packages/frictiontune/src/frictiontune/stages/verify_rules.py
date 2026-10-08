@@ -22,6 +22,8 @@ from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 from frictiontune.stages.common import clip, render_transcript
 
 if TYPE_CHECKING:
+    from collections.abc import Collection, Mapping, Sequence
+
     from frictiontune.pipeline.context import StageContext
 
 _VERIFY_PROMPT = "rule_verifier"
@@ -39,13 +41,43 @@ class VerifyRulesSettings(StageSettings):
     max_transcript_chars: int = 80_000
 
 
-def _read_events(ctx: StageContext) -> dict[str, str]:
-    """Map episode id to a one-line friction summary for the verifier prompt."""
+def _read_events(ctx: StageContext) -> tuple[dict[str, str], dict[str, set[str]]]:
+    """Map each episode to a friction summary and to the events it contains.
+
+    The event-to-episode map lets the gate hold out any episode a rule was
+    compiled from: replaying a rule on its own source would be circular.
+    """
     summaries: dict[str, str] = defaultdict(str)
+    event_ids: dict[str, set[str]] = defaultdict(set)
     for event in ctx.catalog.stream("friction_events", FrictionEvent):
         if not summaries[event.episode_id]:
             summaries[event.episode_id] = event.summary or f"{event.form}/{event.leaf}"
-    return summaries
+        event_ids[event.episode_id].add(event.id)
+    return summaries, event_ids
+
+
+def _held_out(
+    pool: Sequence[Episode],
+    event_ids: Mapping[str, set[str]],
+    source_events: Collection[str],
+    limit: int,
+) -> list[Episode]:
+    """First ``limit`` pool episodes that contain none of the rule's source events.
+
+    A rule is compiled from the friction in particular episodes, so replaying it
+    on those same episodes would inflate ``prevented`` and let a rule pass its own
+    test. Excluding them keeps the verification sample genuinely held out; clean
+    episodes carry no events and are always held out by construction.
+    """
+    own = set(source_events)
+    selected: list[Episode] = []
+    for episode in pool:
+        if len(selected) >= limit:
+            break
+        if own & event_ids.get(episode.id, set()):
+            continue
+        selected.append(episode)
+    return selected
 
 
 def _sample_pools(
@@ -77,7 +109,7 @@ class VerifyRules(Stage):
         lead=Lead.CORE,
         roi="High",
         justification="Keeps the rule track safe by measuring collateral before activation.",
-        evidence=["agentic replay; collateral is the dominant rule risk"],
+        evidence=["agentic replay; per-rule held-out sample; collateral is the dominant rule risk"],
         cost=CostProfile(compute="llm", api_usd="medium", maintenance="low"),
         inputs={"rules": "json", "episodes": "jsonl", "friction_events": "jsonl"},
         outputs={"rules_verified": "json", "verify_rules_report": "json"},
@@ -116,15 +148,18 @@ class VerifyRules(Stage):
         settings = ctx.settings(self.settings_model)
         raw = ctx.catalog.read_json("rules")
         library = RuleLibrary.model_validate(raw)
-        summaries = _read_events(ctx)
+        summaries, event_ids = _read_events(ctx)
         targeted, clean = _sample_pools(ctx, summaries, settings)
 
         verified: list[RuntimeRule] = []
         accepted_count = 0
+        held_out_limited = 0
         for rule in library.rules:
-            episodes = (
-                targeted[: settings.episodes_per_rule] + clean[: settings.clean_episodes_per_rule]
+            targeted_episodes = _held_out(
+                targeted, event_ids, rule.source_events, settings.episodes_per_rule
             )
+            held_out_limited += int(len(targeted_episodes) < settings.episodes_per_rule)
+            episodes = targeted_episodes + clean[: settings.clean_episodes_per_rule]
             verdicts = await asyncio.gather(
                 *(
                     self._check(
@@ -171,6 +206,7 @@ class VerifyRules(Stage):
             "candidate": len(verified) - accepted_count,
             "episodes_targeted": len(targeted),
             "episodes_clean": len(clean),
+            "held_out_limited": held_out_limited,
         }
         ctx.emit_json("verify_rules_report.json", report)
         ctx.emit_text(
@@ -180,7 +216,8 @@ class VerifyRules(Stage):
             f"- active: {accepted_count}\n"
             f"- candidate: {len(verified) - accepted_count}\n"
             f"- gate: prevented >= {settings.min_prevented}, "
-            f"collateral <= {settings.max_collateral}\n",
+            f"collateral <= {settings.max_collateral}\n"
+            f"- held-out limited: {held_out_limited}\n",
         )
         return StageResult.from_context(
             ctx,
