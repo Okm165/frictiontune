@@ -84,12 +84,13 @@ class CompileRules(Stage):
         schemas: list[JsonObject],
     ) -> list[RuntimeRule]:
         role = ctx.config.role(RoleName.RULE_COMPILER)
+        shown = events[: settings.max_rules_per_episode]
         result = await ctx.run.gateway.complete_structured(
             RoleName.RULE_COMPILER,
             role,
             _COMPILE_PROMPT,
             {
-                "friction": _render_friction(events[: settings.max_rules_per_episode]),
+                "friction": _render_friction(shown),
                 "context": clip(render_transcript(episode.messages), settings.max_transcript_chars),
                 "tool_schemas": "\n".join(dumps(schema) for schema in schemas) or "(none observed)",
             },
@@ -101,7 +102,10 @@ class CompileRules(Stage):
             rules.append(
                 RuntimeRule(
                     id=identifier,
-                    source_events=[event.id for event in events],
+                    # Attribute only to the events the compiler was actually shown;
+                    # beyond that it never saw them, so claiming them would be false
+                    # provenance in the exported rule artifact.
+                    source_events=[event.id for event in shown],
                     applicability=draft.applicability,
                     instruction=draft.instruction,
                     scope=draft.scope,
