@@ -75,8 +75,8 @@ def _replay_notes(
         )
     elif len(sampling_seeds) > 1:
         notes.append(
-            f"sampled {len(sampling_seeds)} generations per example at "
-            f"temperature {settings.sampling_temperature:g}"
+            f"sampled {len(sampling_seeds)} seeded generations per example at "
+            f"temperature {settings.sampling_temperature:g} (seeds {sampling_seeds})"
         )
     return notes
 
@@ -133,9 +133,11 @@ class EvaluateReplay(Stage):
         role: RoleName,
         config: LlmRoleConfig,
         ctx: StageContext,
+        *,
+        seed: int,
     ) -> str:
         messages = to_chat_messages(example.context, include_reasoning=False)
-        response = await ctx.run.gateway.complete_text(role, config, messages)
+        response = await ctx.run.gateway.complete_text(role, config, messages, seed=seed)
         return response.text
 
     async def _judge(
@@ -176,12 +178,12 @@ class EvaluateReplay(Stage):
         base_role = self._role(ctx, RoleName.TARGET, settings)
         adapter_role = self._role(ctx, RoleName.ADAPTER, settings)
         totals = {side: {name: 0.0 for name, _dir in _SIGNALS} for side in ("base", "adapter")}
-        for _seed in seeds:
+        for seed in seeds:
             for side, role, config in (
                 ("base", RoleName.TARGET, base_role),
                 ("adapter", RoleName.ADAPTER, adapter_role),
             ):
-                continuation = await self._generate(example, role, config, ctx)
+                continuation = await self._generate(example, role, config, ctx, seed=seed)
                 verdict = await self._judge(example, continuation, ctx, settings)
                 totals[side]["friction_avoidance"] += verdict.friction_avoidance
                 totals[side]["correctness"] += verdict.correctness

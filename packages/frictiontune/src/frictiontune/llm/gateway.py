@@ -142,9 +142,10 @@ class LlmGateway:
         messages: Sequence[ChatMessage],
         *,
         tools: Sequence[ToolSpec] | None = None,
+        seed: int | None = None,
     ) -> LlmResponse:
         """Raw completion (still transport-retried and cached by the client)."""
-        return await self._client.complete(role, config, messages, tools=tools)
+        return await self._client.complete(role, config, messages, tools=tools, seed=seed)
 
     async def complete_structured(
         self,

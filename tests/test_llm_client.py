@@ -115,6 +115,66 @@ class _FakeEndpoint:
         self.chat = SimpleNamespace(completions=_FakeCompletions(outcomes))
 
 
+class _CapturingCompletions:
+    """Records the kwargs of each ``create`` call and returns one fixed outcome."""
+
+    def __init__(self, outcome: object) -> None:
+        self.calls: list[dict[str, object]] = []
+        self._outcome = outcome
+
+    async def create(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        return self._outcome
+
+
+def _capturing_client(
+    tmp_path: Path, completions: _CapturingCompletions
+) -> tuple[LlmClient, LlmRoleConfig]:
+    client = LlmClient(ContentCache(tmp_path))
+    config = LlmRoleConfig(model="m", cache=False)
+    endpoint = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    client._sdk[("", "EMPTY", config.timeout_s)] = cast("AsyncOpenAI", endpoint)
+    return client, config
+
+
+async def test_client_forwards_a_seed_to_the_provider(tmp_path: Path) -> None:
+    completions = _CapturingCompletions(_completion())
+    client, config = _capturing_client(tmp_path, completions)
+
+    await client.complete(RoleName.TARGET, config, [ChatMessage.user("hi")], seed=7)
+
+    assert completions.calls[0]["seed"] == 7
+
+
+async def test_client_omits_the_seed_when_unset(tmp_path: Path) -> None:
+    completions = _CapturingCompletions(_completion())
+    client, config = _capturing_client(tmp_path, completions)
+
+    await client.complete(RoleName.TARGET, config, [ChatMessage.user("hi")])
+
+    assert "seed" not in completions.calls[0]
+
+
+def test_seed_participates_in_the_cache_key(tmp_path: Path) -> None:
+    client = LlmClient(ContentCache(tmp_path))
+    config = LlmRoleConfig(model="m")
+
+    def key(seed: int | None) -> str:
+        return client._cache_key(
+            RoleName.TARGET,
+            config,
+            [ChatMessage.user("hi")],
+            None,
+            None,
+            force_json=False,
+            schema_name="response",
+            seed=seed,
+        )
+
+    assert key(1) != key(2)
+    assert key(None) != key(0)
+
+
 def _completion() -> object:
     return SimpleNamespace(
         choices=[

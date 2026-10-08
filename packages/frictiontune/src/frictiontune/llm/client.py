@@ -160,6 +160,7 @@ class LlmClient:
         *,
         force_json: bool,
         schema_name: str,
+        seed: int | None,
     ) -> str:
         return content_hash(
             {
@@ -173,6 +174,7 @@ class LlmClient:
                 "force_json": force_json,
                 "schema_name": schema_name,
                 "response_schema": response_schema,
+                "seed": seed,
                 "messages": [message.to_openai() for message in messages],
                 "tools": [tool.to_openai() for tool in tools] if tools else None,
             }
@@ -188,8 +190,15 @@ class LlmClient:
         force_json: bool = False,
         response_schema: dict[str, Any] | None = None,
         schema_name: str = "response",
+        seed: int | None = None,
     ) -> LlmResponse:
-        """Run one chat completion with caching and centralized retries."""
+        """Run one chat completion with caching and centralized retries.
+
+        ``seed`` is forwarded to the provider when set, so a stochastic
+        generation is reproducible (``None`` leaves sampling unseeded). It is
+        part of the cache key: the same prompt at a different seed is a
+        different request.
+        """
         cache_key = self._cache_key(
             role,
             config,
@@ -198,6 +207,7 @@ class LlmClient:
             response_schema,
             force_json=force_json,
             schema_name=schema_name,
+            seed=seed,
         )
         if config.cache:
             cached = self._cache.get(f"llm/{role.value}", cache_key)
@@ -213,6 +223,8 @@ class LlmClient:
         }
         if tools:
             payload["tools"] = [tool.to_openai() for tool in tools]
+        if seed is not None:
+            payload["seed"] = seed
         response_format = build_response_format(
             config, schema=response_schema, schema_name=schema_name, force_json=force_json
         )
