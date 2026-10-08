@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.errors import StageError
+from frictiontune.core.json import json_block_validity
 from frictiontune.domain.dataset import SFTRecord, TrainingExample
 from frictiontune.domain.responses import JudgeVerdict
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
@@ -49,10 +50,35 @@ class EvaluateReplaySettings(StageSettings):
 
 
 def _format_valid(text: str) -> float:
-    """Deterministic structural validity of a generated continuation."""
+    """Structural validity of any JSON the continuation chose to emit.
+
+    Empty output scores 0; otherwise it is the fraction of fenced JSON blocks
+    that parse (1.0 when there are none). This measures the tool-call protocol,
+    not meaning.
+    """
     if not text.strip():
         return 0.0
-    return float(text.count("{") == text.count("}") and text.count("[") == text.count("]"))
+    return json_block_validity(text)
+
+
+def _replay_notes(
+    settings: EvaluateReplaySettings,
+    configured_seeds: Sequence[int],
+    sampling_seeds: Sequence[int],
+) -> list[str]:
+    """Notes explaining how sampling was actually performed."""
+    notes = ["lucky-pass flag and in-the-loop user simulation are evidence-gated extensions"]
+    if settings.sampling_temperature <= 0.0 and len(configured_seeds) > 1:
+        notes.append(
+            f"temperature 0: collapsed {len(configured_seeds)} configured seeds to "
+            "one deterministic sample per example"
+        )
+    elif len(sampling_seeds) > 1:
+        notes.append(
+            f"sampled {len(sampling_seeds)} generations per example at "
+            f"temperature {settings.sampling_temperature:g}"
+        )
+    return notes
 
 
 class EvaluateReplay(Stage):
@@ -166,6 +192,12 @@ class EvaluateReplay(Stage):
         """Replay eval examples and emit the dashboard."""
         settings = ctx.settings(self.settings_model)
         seeds = ctx.config.evaluation.seeds or [0]
+        # Extra seeds only buy samples when decoding is stochastic. At
+        # temperature 0 every configured seed yields the identical generation,
+        # which would fabricate confidence, so collapse to one deterministic
+        # sample and say so.
+        deterministic = settings.sampling_temperature <= 0.0
+        sampling_seeds = [seeds[0]] if deterministic else list(seeds)
         ids = set(self._eval_ids(ctx))
         examples = self._eval_examples(ctx, ids)
         if settings.max_examples:
@@ -174,7 +206,7 @@ class EvaluateReplay(Stage):
             raise StageError("evaluate_replay", "no eval examples available")
 
         results = await asyncio.gather(
-            *(self._replay_one(example, ctx, settings, seeds) for example in examples)
+            *(self._replay_one(example, ctx, settings, sampling_seeds) for example in examples)
         )
 
         baseline: dict[str, list[float]] = {name: [] for name, _dir in _SIGNALS}
@@ -193,9 +225,9 @@ class EvaluateReplay(Stage):
         dashboard = build_dashboard(
             signals,
             episodes=len(examples),
-            seeds=list(seeds),
+            seeds=list(sampling_seeds),
             lucky_pass_rate=0.0,
-            notes=["lucky-pass flag and in-the-loop user simulation are evidence-gated extensions"],
+            notes=_replay_notes(settings, seeds, sampling_seeds),
         )
         ctx.emit_json("dashboard", dashboard)
         ctx.emit_jsonl(

@@ -17,11 +17,37 @@ Two JSON realities need explicit allowances, and only these:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, TypeVar
+from typing import Annotated, Any, TypeVar
 
 from pydantic import BeforeValidator, Field
 
 EnumT = TypeVar("EnumT", bound=Enum)
+
+
+def _to_int(value: Any) -> Any:
+    """Coerce an integral JSON number to ``int``; leave everything else alone.
+
+    JSON has a single number type, so a model may write a count, index, or 0-5
+    score as ``4.0`` rather than ``4``. Both are the same JSON number. A
+    non-integral float, a string, or a bool is left untouched so strict
+    validation still rejects it (a stringified number is a malformed reply).
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+# JSON numbers are not typed, so an integer field accepts an integral float.
+# The counterpart of ``Probability`` for count/index/score fields.
+IntLike = Annotated[int, BeforeValidator(_to_int)]
+
+# A count or turn index: integral-float tolerant and non-negative.
+NonNegativeInt = Annotated[int, BeforeValidator(_to_int), Field(ge=0)]
+
+# A 0-5 rubric score: integral-float tolerant, still bounded.
+Score = Annotated[int, BeforeValidator(_to_int), Field(ge=0, le=5)]
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0, strict=False)]
 

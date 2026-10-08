@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from frictiontune.core.json import dumps, loads, try_loads
+from frictiontune.core.json import dumps, json_block_validity, loads, try_loads
 from frictiontune.llm.parsing import extract_json_object
 
 
@@ -52,3 +52,18 @@ def test_extract_json_object_recovers_after_a_malformed_object() -> None:
 def test_extract_json_object_returns_none_without_object() -> None:
     assert extract_json_object("no json here") is None
     assert extract_json_object("[1, 2, 3]") is None
+
+
+def test_json_block_validity_ignores_absent_json() -> None:
+    # No JSON emitted means nothing is malformed.
+    assert json_block_validity("plain prose answer") == 1.0
+
+
+def test_json_block_validity_scores_parseable_blocks() -> None:
+    assert json_block_validity('```json\n{"a": 1}\n```') == 1.0
+    assert json_block_validity('```json\n{"a": }\n```') == 0.0
+
+
+def test_json_block_validity_averages_over_blocks() -> None:
+    text = '```json\n{"a": 1}\n```\n```json\n{oops}\n```'
+    assert json_block_validity(text) == 0.5

@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import Field, field_validator
 
 from frictiontune.domain.trace import DomainModel
-from frictiontune.domain.types import Probability
+from frictiontune.domain.types import NonNegativeInt, Probability
 
 Resolution = Literal["user-correction", "self-recovery", "none"]
 RecoveryTrigger = Literal["self", "user-correction", "none"]
@@ -16,7 +16,7 @@ RecoveryTrigger = Literal["self", "user-correction", "none"]
 class EvidenceSpan(DomainModel):
     """A verbatim span that justifies a friction claim."""
 
-    turn: int = Field(ge=0)
+    turn: NonNegativeInt
     quote: str
 
     @field_validator("quote")
@@ -79,9 +79,9 @@ class RecoverySpan(DomainModel):
     """Agent response: the recovery span within a friction episode."""
 
     found: bool
-    failure_turn: int | None = None
-    recovery_start: int | None = None
-    recovery_end: int | None = None
+    failure_turn: NonNegativeInt | None = None
+    recovery_start: NonNegativeInt | None = None
+    recovery_end: NonNegativeInt | None = None
     trigger: RecoveryTrigger = "none"
     rationale: str = ""
 

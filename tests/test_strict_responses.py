@@ -195,6 +195,31 @@ def test_strict_validation_accepts_a_str_enum_by_value() -> None:
     assert rules.rules[0].verifier.tier is VerifierTier.SEMANTIC
 
 
+def test_strict_validation_accepts_an_integral_float_score() -> None:
+    # JSON has one number type, so a score may arrive as 5.0 rather than 5.
+    verdict = JudgeVerdict.model_validate(
+        {**_SAMPLES[JudgeVerdict], "task_adherence": 5.0}, strict=True
+    )
+
+    assert verdict.task_adherence == 5
+    with pytest.raises(ValidationError):
+        JudgeVerdict.model_validate({**_SAMPLES[JudgeVerdict], "task_adherence": "5"}, strict=True)
+    with pytest.raises(ValidationError):
+        JudgeVerdict.model_validate({**_SAMPLES[JudgeVerdict], "task_adherence": 4.5}, strict=True)
+
+
+def test_strict_validation_accepts_integral_float_indices() -> None:
+    verdict = RuleVerdict.model_validate(
+        {**_SAMPLES[RuleVerdict], "evidence_turns": [1.0, 2.0]}, strict=True
+    )
+
+    assert verdict.evidence_turns == [1, 2]
+    span = RecoverySpan.model_validate(
+        {**_SAMPLES[RecoverySpan], "recovery_start": 2.0, "recovery_end": 3.0}, strict=True
+    )
+    assert (span.recovery_start, span.recovery_end) == (2, 3)
+
+
 _JUDGE_VALUES: dict[str, object] = {
     "candidate_id": "c1",
     "source": "unit",

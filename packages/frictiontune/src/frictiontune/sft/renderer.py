@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from frictiontune.core.json import dumps
 from frictiontune.domain.trace import (
     CompactionPart,
     Message,
@@ -24,7 +25,7 @@ from frictiontune.domain.trace import (
     TextPart,
     ToolPart,
 )
-from frictiontune.llm.messages import ChatMessage, ToolCall
+from frictiontune.llm.messages import ChatMessage
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -33,6 +34,25 @@ if TYPE_CHECKING:
 
 _REASONING_OPEN = "<|reasoning|>"
 _REASONING_CLOSE = "<|/reasoning|>"
+
+# Both tokenizers serialize only a message's role and text content, so a tool
+# call attached as a structured field would be silently dropped from the
+# training text (and a tool result's name and id with it). These markers carry
+# the call and its result inside the content itself, which every chat template
+# renders, so the trained sequence contains the tool interaction.
+_TOOL_CALL_OPEN = "<tool_call>"
+_TOOL_CALL_CLOSE = "</tool_call>"
+
+
+def _render_tool_call(part: ToolPart) -> str:
+    """Serialize one tool call into the assistant content as tagged JSON."""
+    payload = dumps({"name": part.name, "arguments": part.arguments}, sort_keys=False)
+    return f"{_TOOL_CALL_OPEN}{payload}{_TOOL_CALL_CLOSE}"
+
+
+def _tool_response_text(name: str, output: str) -> str:
+    """Serialize a tool result so its name survives templates that drop fields."""
+    return f'<tool_response name="{name}">\n{output}\n</tool_response>'
 
 
 class RenderedChat(BaseModel):
@@ -54,6 +74,12 @@ class RenderedChat(BaseModel):
 
 
 def _assistant_content(message: Message, *, include_reasoning: bool) -> str:
+    """Render an assistant message, preserving text, reasoning, and tool calls.
+
+    Parts are rendered in their original order; tool calls appear as tagged JSON
+    at the point they were made, so the trained sequence keeps the agent's tool
+    protocol rather than dropping it.
+    """
     chunks: list[str] = []
     for part in message.parts:
         if isinstance(part, ReasoningPart):
@@ -61,6 +87,8 @@ def _assistant_content(message: Message, *, include_reasoning: bool) -> str:
                 chunks.append(f"{_REASONING_OPEN}\n{part.text}\n{_REASONING_CLOSE}")
         elif isinstance(part, (TextPart, SystemPart, CompactionPart)) and part.text:
             chunks.append(part.text)
+        elif isinstance(part, ToolPart):
+            chunks.append(_render_tool_call(part))
     return "\n".join(chunks).strip()
 
 
@@ -71,30 +99,31 @@ def to_chat_messages(
 ) -> list[ChatMessage]:
     """Convert domain messages to chat messages, expanding tool calls/results.
 
-    Tool results become ``role="tool"`` messages; callers always mask them.
+    Tool calls are embedded in the assistant content (see :func:`_assistant_content`);
+    tool results become ``role="tool"`` messages whose content carries the tool
+    name, so a template that ignores structured fields still preserves the link.
+    Callers always mask the tool-result messages.
     """
     chat: list[ChatMessage] = []
     for message in messages:
         if message.role == "assistant":
             content = _assistant_content(message, include_reasoning=include_reasoning)
-            calls: list[ToolCall] = []
             results: list[ChatMessage] = []
             for index, part in enumerate(message.parts):
                 if not isinstance(part, ToolPart):
                     continue
                 call_id = part.call_id or f"{message.id}:tool{index}"
-                calls.append(ToolCall(id=call_id, name=part.name, arguments=part.arguments))
                 if part.output is not None:
                     results.append(
                         ChatMessage(
                             role="tool",
-                            content=part.output,
+                            content=_tool_response_text(part.name, part.output),
                             name=part.name,
                             tool_call_id=call_id,
                         )
                     )
-            if content or calls:
-                chat.append(ChatMessage(role="assistant", content=content, tool_calls=calls))
+            if content:
+                chat.append(ChatMessage(role="assistant", content=content))
             chat.extend(results)
         else:
             content = "\n".join(

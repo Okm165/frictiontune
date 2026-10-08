@@ -18,14 +18,13 @@ checks, consistent with the project's "LLM judges, deterministic plumbing" rule.
 
 from __future__ import annotations
 
-import json
-import re
 from typing import TYPE_CHECKING, Any
+
+from frictiontune.core.json import json_block_validity
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _OPEN_MARKER = "<|im_start|>"
 _CLOSE_MARKER = "<|im_end|>"
 
@@ -44,17 +43,7 @@ def _format_score(completion: str, *, max_chars: int) -> float:
 
 def _tool_score(completion: str) -> float:
     """Fraction of fenced JSON blocks that parse; 1.0 when there are none."""
-    blocks = _JSON_BLOCK.findall(completion)
-    if not blocks:
-        return 1.0
-    valid = 0
-    for block in blocks:
-        try:
-            json.loads(block)
-        except json.JSONDecodeError:
-            continue
-        valid += 1
-    return valid / len(blocks)
+    return json_block_validity(completion)
 
 
 def _anti_hack_score(completion: str, prompt: str) -> float:

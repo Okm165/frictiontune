@@ -5,13 +5,13 @@ from __future__ import annotations
 from pydantic import Field
 
 from frictiontune.domain.trace import DomainModel
-from frictiontune.domain.types import Probability
+from frictiontune.domain.types import NonNegativeInt, Probability
 
 
 class Attribution(DomainModel):
     """Agent response: the earliest decisive step causing a friction event."""
 
-    decisive_turn: int | None = Field(default=None, ge=0)
+    decisive_turn: NonNegativeInt | None = None
     cause: str
     confidence: Probability
     rationale: str = ""

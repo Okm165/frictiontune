@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import Field
 
 from frictiontune.domain.trace import DomainModel, Message
+from frictiontune.domain.types import NonNegativeInt
 
 PhaseKind = Literal["plan", "execute", "verify", "recover"]
 
@@ -15,8 +16,8 @@ class PhaseDraft(DomainModel):
     """Agent response: one phase before the stage assigns it an id."""
 
     kind: PhaseKind
-    start_turn: int = Field(ge=0)
-    end_turn: int = Field(ge=0)
+    start_turn: NonNegativeInt
+    end_turn: NonNegativeInt
     goal: str = ""
 
 

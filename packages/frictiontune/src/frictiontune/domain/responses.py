@@ -13,7 +13,7 @@ from pydantic import Field
 from frictiontune.core.json import JsonObject
 from frictiontune.domain.profiles import BehaviorDimension
 from frictiontune.domain.trace import DomainModel
-from frictiontune.domain.types import Probability
+from frictiontune.domain.types import NonNegativeInt, Probability, Score
 
 
 class CompactedToolOutput(DomainModel):
@@ -21,7 +21,7 @@ class CompactedToolOutput(DomainModel):
 
     kept: str
     preserved_failure: bool = False
-    elided_lines: int = 0
+    elided_lines: NonNegativeInt = 0
     rationale: str = ""
 
 
@@ -36,7 +36,7 @@ class InferredToolSchema(DomainModel):
 class RedactionDecision(DomainModel):
     """One decision inside a :class:`RedactionReview`."""
 
-    index: int = Field(ge=0)
+    index: NonNegativeInt
     redact: bool
     reason: str = ""
 
@@ -54,11 +54,11 @@ class JudgeVerdict(DomainModel):
     # writing the rationale first makes the score and accept decision deliberate
     # rather than post-hoc.
     reason: str = ""
-    task_adherence: int = Field(ge=0, le=5)
-    correctness: int = Field(ge=0, le=5)
-    friction_avoidance: int = Field(ge=0, le=5)
-    clarity: int = Field(ge=0, le=5)
-    evidence: int = Field(ge=0, le=5)
+    task_adherence: Score
+    correctness: Score
+    friction_avoidance: Score
+    clarity: Score
+    evidence: Score
     accept: bool
 
     def total(self) -> int:
@@ -90,7 +90,7 @@ class RuleVerdict(DomainModel):
     prevents: bool
     collateral: bool
     confidence: Probability
-    evidence_turns: list[int] = Field(default_factory=list)
+    evidence_turns: list[NonNegativeInt] = Field(default_factory=list)
 
 
 class FrictionClusters(DomainModel):
@@ -134,6 +134,6 @@ class ReduceSummary(DomainModel):
     """reduce response: a faithful, decision-preserving summary of a span."""
 
     summary: str
-    preserved_failures: int = 0
-    dropped_turns: int = 0
+    preserved_failures: NonNegativeInt = 0
+    dropped_turns: NonNegativeInt = 0
     rationale: str = ""

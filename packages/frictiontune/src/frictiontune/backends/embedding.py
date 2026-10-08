@@ -35,7 +35,14 @@ class OpenAiEmbedder:
         )
 
     def _cache_key(self, texts: Sequence[str]) -> str:
-        return content_hash({"model": self._config.model, "texts": list(texts)})
+        return content_hash(
+            {
+                "model": self._config.model,
+                "base_url": self._config.base_url,
+                "dimensions": self._config.dimensions,
+                "texts": list(texts),
+            }
+        )
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Embed ``texts`` in order, caching the whole batch by content hash."""

@@ -7,6 +7,7 @@ streaming. No semantic judgment lives here.
 from __future__ import annotations
 
 import json
+import re
 from typing import IO, TYPE_CHECKING, Any, TypeAlias
 
 from pydantic import BaseModel
@@ -17,6 +18,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 JsonScalar: TypeAlias = bool | int | float | str | None
+
+# A fenced ```json ({...})``` block: the explicit "this is the payload" signal a
+# coding agent emits for a tool call. Used only to *measure* structural validity
+# (a reward/format term), never to author or repair content.
+_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 # A recursive JSON alias. It must be a lazy ``TypeAliasType`` (not an implicit
 # ``list["JsonValue"]`` alias): pydantic resolves field annotations eagerly, and
@@ -77,3 +83,24 @@ def append_jsonl(handle: IO[str], row: Any) -> None:
     handle.write(dumps(row))
     handle.write("\n")
     handle.flush()
+
+
+def json_block_validity(text: str) -> float:
+    """Fraction of fenced JSON blocks in ``text`` that parse.
+
+    A structural measurement, not a judgment: it reports whether the JSON the
+    model chose to emit is well-formed and returns ``1.0`` when it emitted no
+    JSON at all (there is nothing to be malformed). Shared by the replay
+    ``format_valid`` signal and the GRPO ``tool`` reward so the two cannot drift.
+    """
+    blocks = _JSON_BLOCK.findall(text)
+    if not blocks:
+        return 1.0
+    valid = 0
+    for block in blocks:
+        try:
+            json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        valid += 1
+    return valid / len(blocks)
