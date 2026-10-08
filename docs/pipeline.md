@@ -129,8 +129,10 @@ their evidence unioned *(plumbing)*.
 
 Agentic replay over a held-out sample: would each rule have fired? Would it have
 **prevented** the targeted friction? Would it have **blocked correct behaviour**
-(collateral)? Collateral is the failure mode that makes rules dangerous, so the
-accept gate requires prevention and forbids collateral. Only verified rules ship.
+(collateral)? The sample is held out *per rule* — the episodes a rule was compiled
+from are excluded, so a rule cannot pass on its own evidence. Collateral is the
+failure mode that makes rules dangerous, so the accept gate requires prevention
+and forbids collateral. Only verified rules ship.
 
 ### `mine`
 
