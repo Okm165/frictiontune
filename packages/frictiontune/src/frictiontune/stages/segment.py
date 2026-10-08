@@ -34,8 +34,14 @@ class SegmentSettings(StageSettings):
     max_phase_transcript_chars: int = 60_000
 
 
-def compute_features(messages: Sequence[Message]) -> EpisodeFeatures:
-    """Compute descriptive, non-judgmental episode features."""
+def compute_features(
+    messages: Sequence[Message], *, user_turns_in_session: int = 0
+) -> EpisodeFeatures:
+    """Compute descriptive, non-judgmental episode features.
+
+    ``user_turns_in_session`` is the session-wide user-turn count, which the
+    episode's own messages cannot reveal; the caller cutting episodes supplies it.
+    """
     turns = tool_calls = tool_errors = reasoning = text_turns = compactions = chars = 0
     for message in messages:
         chars += len(message.content_text())
@@ -59,6 +65,7 @@ def compute_features(messages: Sequence[Message]) -> EpisodeFeatures:
         text_turns=text_turns,
         compactions=compactions,
         char_count=chars,
+        user_turns_in_session=user_turns_in_session,
     )
 
 
@@ -68,6 +75,7 @@ def cut_episodes(session_id: str, messages: Sequence[Message]) -> list[Episode]:
     current: list[Message] = []
     start_id: str | None = None
     start_seq = 0
+    session_user_turns = sum(1 for message in messages if message.role == "user")
 
     def close(end_seq: int) -> None:
         if start_id is None:
@@ -90,7 +98,7 @@ def cut_episodes(session_id: str, messages: Sequence[Message]) -> list[Episode]:
                 time_created=start_message.time_created,
                 user_text=user_text,
                 messages=list(current),
-                features=compute_features(current),
+                features=compute_features(current, user_turns_in_session=session_user_turns),
             )
         )
 
