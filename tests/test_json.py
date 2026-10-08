@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from frictiontune.core.json import dumps, json_block_validity, loads, try_loads
-from frictiontune.llm.parsing import extract_json_object
+from frictiontune.llm.parsing import extract_json_object, iter_json_objects
 
 
 def test_dumps_is_canonical_and_sorted() -> None:
@@ -52,6 +52,37 @@ def test_extract_json_object_recovers_after_a_malformed_object() -> None:
 def test_extract_json_object_returns_none_without_object() -> None:
     assert extract_json_object("no json here") is None
     assert extract_json_object("[1, 2, 3]") is None
+
+
+def test_extract_json_object_keeps_fences_inside_string_values() -> None:
+    text = '{"kept": "example:\\n```\\ncode\\n```", "rationale": "ok"}'
+    assert extract_json_object(text) == {"kept": "example:\n```\ncode\n```", "rationale": "ok"}
+
+
+def test_extract_json_object_keeps_braces_inside_string_values() -> None:
+    text = '{"kept": "template {x} here", "n": 1}'
+    assert extract_json_object(text) == {"kept": "template {x} here", "n": 1}
+
+
+def test_extract_json_object_does_not_leak_an_inner_object_from_truncation() -> None:
+    # The trailing brace is inside the still-open string, so a truncated reply
+    # must not be mined for the inner {"inner": 1}.
+    text = '{"outer": "text {"inner": 1}'
+    assert extract_json_object(text) is None
+
+
+def test_iter_json_objects_yields_every_top_level_object() -> None:
+    text = 'example {"a": 1} then {"b": 2}'
+    assert list(iter_json_objects(text)) == [{"a": 1}, {"b": 2}]
+
+
+def test_extract_json_object_finds_a_nested_object_whole() -> None:
+    text = '{"outer": {"inner": 1}, "ok": true}'
+    assert extract_json_object(text) == {"outer": {"inner": 1}, "ok": True}
+
+
+def test_json_block_validity_handles_nested_objects() -> None:
+    assert json_block_validity('```json\n{"a": {"b": 1}}\n```') == 1.0
 
 
 def test_json_block_validity_ignores_absent_json() -> None:

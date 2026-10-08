@@ -13,16 +13,20 @@ from typing import IO, TYPE_CHECKING, Any, TypeAlias
 from pydantic import BaseModel
 from typing_extensions import TypeAliasType
 
+from frictiontune.core.errors import ArtifactError
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
     from pathlib import Path
 
 JsonScalar: TypeAlias = bool | int | float | str | None
 
-# A fenced ```json ({...})``` block: the explicit "this is the payload" signal a
-# coding agent emits for a tool call. Used only to *measure* structural validity
-# (a reward/format term), never to author or repair content.
-_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+# A fenced ```json (...)``` block: the explicit "this is the payload" signal a
+# coding agent emits for a tool call. The content is matched up to the closing
+# fence (not to the first brace), so a nested object is captured whole. Used only
+# to *measure* structural validity (a reward/format term), never to author or
+# repair content.
+_JSON_BLOCK = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 # A recursive JSON alias. It must be a lazy ``TypeAliasType`` (not an implicit
 # ``list["JsonValue"]`` alias): pydantic resolves field annotations eagerly, and
@@ -40,7 +44,13 @@ def dumps(value: Any, *, sort_keys: bool = True) -> str:
     """
     if isinstance(value, BaseModel):
         value = value.model_dump(mode="json")
-    return json.dumps(value, sort_keys=sort_keys, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        value,
+        sort_keys=sort_keys,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def loads(text: str) -> JsonValue:
@@ -69,13 +79,20 @@ def write_jsonl(path: Path, rows: Iterable[Any]) -> int:
 
 
 def iter_jsonl(path: Path) -> Iterator[JsonValue]:
-    """Yield parsed JSON objects from a JSONL file, skipping blank lines."""
+    """Yield parsed JSON objects from a JSONL file, skipping blank lines.
+
+    A malformed line names its file and line number rather than surfacing a bare
+    :class:`json.JSONDecodeError`, so an interrupted write is diagnosable.
+    """
     with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
+        for number, line in enumerate(handle, start=1):
             line = line.strip()
             if not line:
                 continue
-            yield loads(line)
+            try:
+                yield loads(line)
+            except json.JSONDecodeError as exc:
+                raise ArtifactError(f"{path}:{number}: malformed JSON line: {exc.msg}") from exc
 
 
 def append_jsonl(handle: IO[str], row: Any) -> None:

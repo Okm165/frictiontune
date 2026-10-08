@@ -61,9 +61,17 @@ def bootstrap_ci(
 
 
 def cosine(left: Sequence[float], right: Sequence[float]) -> float:
-    """Cosine similarity of two vectors (0.0 if either is degenerate)."""
-    if len(left) != len(right) or not left:
+    """Cosine similarity of two vectors.
+
+    A dimension mismatch is a misconfiguration (two embedding models, or a wrong
+    ``dimensions`` setting), not a similarity of zero: it is raised rather than
+    silently returning 0.0, which would quietly blank out all retrieval. A
+    degenerate zero vector still returns 0.0.
+    """
+    if not left or not right:
         return 0.0
+    if len(left) != len(right):
+        raise ValueError(f"cosine: dimension mismatch {len(left)} != {len(right)}")
     dot = sum(a * b for a, b in zip(left, right, strict=True))
     norm_left = math.sqrt(sum(a * a for a in left))
     norm_right = math.sqrt(sum(b * b for b in right))

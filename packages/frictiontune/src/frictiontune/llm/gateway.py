@@ -31,7 +31,7 @@ from frictiontune.core.json import dumps
 from frictiontune.core.logging import get_logger
 from frictiontune.core.retry import RetryPolicy, with_retry
 from frictiontune.llm.messages import ChatMessage, ToolSpec
-from frictiontune.llm.parsing import extract_json_object
+from frictiontune.llm.parsing import iter_json_objects
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -160,9 +160,11 @@ class LlmGateway:
                 actual=schema.__name__,
             )
         system, user = template.render(values)
+        # One system message, not two: several OpenAI-compatible servers reject
+        # (or silently mishandle) multiple system turns. The schema contract is
+        # folded into the prompt's system text so every endpoint sees one.
         history: list[ChatMessage] = [
-            ChatMessage.system(system),
-            ChatMessage.system(schema_contract(schema)),
+            ChatMessage.system(f"{system}\n\n{schema_contract(schema)}"),
             ChatMessage.user(user),
         ]
 
@@ -172,7 +174,7 @@ class LlmGateway:
                 config,
                 history,
                 force_json=True,
-                response_schema=schema.model_json_schema(),
+                response_schema=_inline_refs(schema.model_json_schema()),
                 schema_name=schema.__name__,
             )
             problem = self._validate(response.text, schema)
@@ -203,13 +205,29 @@ class LlmGateway:
         """Return a model instance, or a human-readable problem string.
 
         Validation is strict: a stringified number or boolean is a malformed
-        reply, not something to coerce. The problem string is fed back to the
-        model by the repair loop.
+        reply, not something to coerce. A reply may contain more than one
+        top-level object (an example followed by the answer); the first
+        candidate that validates against the schema wins, so a schema-shaped
+        example is never mistaken for the answer. The problem string is concise
+        and fed back to the model by the repair loop.
         """
-        parsed = extract_json_object(text)
-        if parsed is None:
+        candidates = list(iter_json_objects(text))
+        if not candidates:
             return "reply contained no JSON object"
-        try:
-            return schema.model_validate(parsed, strict=True)
-        except ValidationError as exc:
-            return exc.json(include_url=False)
+        last_error: ValidationError | None = None
+        for parsed in candidates:
+            try:
+                return schema.model_validate(parsed, strict=True)
+            except ValidationError as exc:
+                last_error = exc
+        assert last_error is not None  # candidates is non-empty and all failed
+        return _concise_errors(last_error)
+
+
+def _concise_errors(exc: ValidationError) -> str:
+    """Render a pydantic error as ``path: message`` lines, without echoing input."""
+    lines: list[str] = []
+    for error in exc.errors(include_url=False, include_input=False):
+        location = ".".join(str(part) for part in error.get("loc", ()))
+        lines.append(f"{location or '<root>'}: {error.get('msg', 'invalid')}")
+    return "; ".join(lines) or "reply did not match the schema"

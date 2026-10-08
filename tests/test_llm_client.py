@@ -59,7 +59,7 @@ def test_json_schema_role_sends_the_schema() -> None:
 
     assert built == {
         "type": "json_schema",
-        "json_schema": {"name": "Verdict", "schema": _SCHEMA, "strict": True},
+        "json_schema": {"name": "Verdict", "schema": _SCHEMA},
     }
 
 
@@ -133,12 +133,12 @@ async def test_client_retries_a_provider_transient_error(tmp_path: Path) -> None
             _completion(),
         ]
     )
-    client._sdk[("", "EMPTY")] = cast("AsyncOpenAI", endpoint)
     config = LlmRoleConfig(
         model="m",
         cache=False,
         retry=RetryPolicy(max_attempts=3, initial_delay_s=0.0, jitter_s=0.0),
     )
+    client._sdk[("", "EMPTY", config.timeout_s)] = cast("AsyncOpenAI", endpoint)
 
     response = await client.complete(RoleName.JUDGE, config, [ChatMessage.user("hi")])
 

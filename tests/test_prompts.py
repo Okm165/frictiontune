@@ -234,6 +234,8 @@ async def test_structured_call_injects_the_schema_contract() -> None:
 
     assert verdict.accept
     sent = stub.calls[0]
-    assert [message.role for message in sent] == ["system", "system", "user"]
-    assert "JSON Schema" in sent[1].content
-    assert "task_adherence" in sent[1].content
+    # One system message: the schema contract is folded into the prompt's system
+    # text so endpoints that reject multiple system turns still work.
+    assert [message.role for message in sent] == ["system", "user"]
+    assert "JSON Schema" in sent[0].content
+    assert "task_adherence" in sent[0].content

@@ -1,52 +1,94 @@
 """Recovering a JSON object from model text.
 
-Pure plumbing: tolerate prose and code fences, then return the first parsable
-top-level object. No schema knowledge lives here.
+Pure plumbing: tolerate prose and code fences, then return parsable *top-level*
+objects. No schema knowledge lives here. Braces inside JSON strings are tracked,
+so a valid object whose string values contain braces or backtick fences is
+recovered intact, and a truncated object cannot leak an object embedded in one
+of its own strings.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+_QUOTE = '"'
+_BACKSLASH = "\\"
 
 
-def _strip_code_fence(text: str) -> str:
-    """Return the contents of the first fenced block, or the stripped text.
+def _top_level_object_spans(text: str) -> Iterator[tuple[int, int]]:
+    """Yield ``(start, end)`` spans of balanced top-level ``{...}`` objects.
 
-    A leading ``json``/``JSON`` language tag is dropped. Fence contents are
-    preferred over the surrounding prose because a fence is an explicit "this is
-    the payload" signal.
+    The scanner tracks string and escape state, so braces that appear inside a
+    JSON string are never mistaken for structure. A truncated object never
+    closes at depth zero, so it yields no span at all rather than exposing an
+    inner object hidden in one of its strings.
     """
-    candidate = text.strip()
-    fence_start = candidate.find("```")
-    if fence_start == -1:
-        return candidate
-    fence_end = candidate.find("```", fence_start + 3)
-    if fence_end == -1:
-        return candidate
-    inner = candidate[fence_start + 3 : fence_end].strip()
-    first_newline = inner.find("\n")
-    if first_newline != -1 and inner[:first_newline].strip().lower() in {"json", ""}:
-        inner = inner[first_newline + 1 :]
-    return inner.strip()
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == _BACKSLASH:
+                escaped = True
+            elif char == _QUOTE:
+                in_string = False
+            continue
+        if char == _QUOTE:
+            if depth > 0:
+                in_string = True
+            continue
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    yield start, index + 1
+                    start = -1
+
+
+def iter_json_objects(text: str) -> Iterator[dict[str, Any]]:
+    """Yield every parsable top-level JSON object in ``text``, in order.
+
+    A whole-text fast path handles the common ``response_format`` case of a reply
+    that is exactly one object. Otherwise balanced spans are decoded in order;
+    spans that are not valid JSON (a prose brace, a broken example) are skipped.
+    Callers that know the intended schema can select the candidate that
+    validates rather than trusting the first braces in the reply.
+    """
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            whole = json.loads(stripped)
+        except json.JSONDecodeError:
+            whole = None
+        if isinstance(whole, dict):
+            yield whole
+            return
+    for start, end in _top_level_object_spans(text):
+        try:
+            parsed = json.loads(text[start:end])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            yield parsed
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:
     """Return the first parsable top-level JSON object found in ``text``, else ``None``.
 
-    Scanning resumes at every ``{`` instead of assuming the object spans the
-    first brace to the last, so prose containing braces (``the set {x} …``)
-    cannot swallow a later, valid object and trailing prose cannot invalidate an
-    otherwise well-formed reply.
+    Scanning respects JSON string boundaries, so prose containing braces
+    (``the set {x} …``) cannot swallow a later, valid object, trailing prose
+    cannot invalidate an otherwise well-formed reply, and a fence or brace inside
+    a string value cannot truncate the real payload.
     """
-    candidate = _strip_code_fence(text)
-    decoder = json.JSONDecoder()
-    start = candidate.find("{")
-    while start != -1:
-        try:
-            parsed, _ = decoder.raw_decode(candidate, start)
-        except json.JSONDecodeError:
-            start = candidate.find("{", start + 1)
-            continue
-        return parsed if isinstance(parsed, dict) else None
-    return None
+    return next(iter_json_objects(text), None)

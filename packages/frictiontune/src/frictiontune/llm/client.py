@@ -80,9 +80,13 @@ def build_response_format(
     if config.response_format == "json_schema":
         if schema is None:
             return {"type": "json_object"}
+        # ``strict: true`` requires every property to be required and no numeric
+        # bounds or unions, which pydantic's default-mode schema does not
+        # satisfy; providers then answer 400. Omit it and let the endpoint apply
+        # its own schema handling.
         return {
             "type": "json_schema",
-            "json_schema": {"name": schema_name, "schema": schema, "strict": True},
+            "json_schema": {"name": schema_name, "schema": schema},
         }
     if force_json or config.response_format == "json_object":
         return {"type": "json_object"}
@@ -95,11 +99,15 @@ class LlmClient:
     def __init__(self, cache: ContentCache) -> None:
         """Store the content cache used to deduplicate identical calls."""
         self._cache = cache
-        self._sdk: dict[tuple[str, str], AsyncOpenAI] = {}
+        self._sdk: dict[tuple[str, str, float], AsyncOpenAI] = {}
         self._semaphores: dict[RoleName, asyncio.Semaphore] = {}
 
     def _endpoint(self, config: LlmRoleConfig) -> AsyncOpenAI:
-        key = (config.base_url or "", _api_key(config))
+        # The endpoint cache key must cover every transport-affecting field.
+        # Roles commonly share a base_url but differ in timeout; keying on
+        # (base_url, api_key) alone would let the first role's timeout silently
+        # govern the rest.
+        key = (config.base_url or "", _api_key(config), config.timeout_s)
         client = self._sdk.get(key)
         if client is None:
             client = AsyncOpenAI(
@@ -125,6 +133,9 @@ class LlmClient:
         messages: Sequence[ChatMessage],
         tools: Sequence[ToolSpec] | None,
         response_schema: dict[str, Any] | None,
+        *,
+        force_json: bool,
+        schema_name: str,
     ) -> str:
         return content_hash(
             {
@@ -135,6 +146,8 @@ class LlmClient:
                 "temperature": config.temperature,
                 "max_tokens": config.max_tokens,
                 "response_format": config.response_format,
+                "force_json": force_json,
+                "schema_name": schema_name,
                 "response_schema": response_schema,
                 "messages": [message.to_openai() for message in messages],
                 "tools": [tool.to_openai() for tool in tools] if tools else None,
@@ -153,7 +166,15 @@ class LlmClient:
         schema_name: str = "response",
     ) -> LlmResponse:
         """Run one chat completion with caching and centralized retries."""
-        cache_key = self._cache_key(role, config, messages, tools, response_schema)
+        cache_key = self._cache_key(
+            role,
+            config,
+            messages,
+            tools,
+            response_schema,
+            force_json=force_json,
+            schema_name=schema_name,
+        )
         if config.cache:
             cached = self._cache.get(f"llm/{role.value}", cache_key)
             if isinstance(cached, dict):
@@ -191,12 +212,16 @@ class LlmClient:
         except Exception as exc:  # provider SDK errors
             raise LlmError(f"{role.value}: completion failed: {exc}") from exc
 
-        choice = completion.choices[0]
+        choices = getattr(completion, "choices", None)
+        if not choices:
+            raise LlmError(f"{role.value}: provider returned no choices")
+        choice = choices[0]
+        message = getattr(choice, "message", None)
         usage = getattr(completion, "usage", None)
         response = LlmResponse(
-            text=choice.message.content or "",
-            model=completion.model,
-            finish_reason=choice.finish_reason,
+            text=getattr(message, "content", None) or "",
+            model=getattr(completion, "model", None) or config.model,
+            finish_reason=getattr(choice, "finish_reason", None),
             usage=TokenUsage(
                 prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
                 completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
