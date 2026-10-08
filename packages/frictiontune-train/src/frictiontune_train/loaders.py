@@ -78,6 +78,26 @@ def load_transformers_base(base_model: str, hardware: HardwareConfig) -> Any:
     )
 
 
+def prepare_for_training(model: Any, hardware: HardwareConfig) -> Any:
+    """Enable gradient checkpointing and input grads as the dtype requires.
+
+    The kbit helper does both for a quantised model; a bf16/fp16 model must do
+    them explicitly or the first backward pass fails on inputs that do not
+    require grad. Kept in one place so every training entry point agrees.
+    """
+    peft = require("peft", hint=torch_hint())
+    if hardware.quant in ("nf4", "fp4"):
+        return peft.prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=hardware.gradient_checkpointing
+        )
+    if hardware.gradient_checkpointing:
+        if hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_enable()
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+    return model
+
+
 def apply_lora(
     model: Any,
     *,
@@ -90,18 +110,7 @@ def apply_lora(
 ) -> Any:
     """Prepare a quantised model and attach LoRA (MoE-safe by default)."""
     peft = require("peft", hint=torch_hint())
-    if hardware.quant in ("nf4", "fp4"):
-        model = peft.prepare_model_for_kbit_training(
-            model, use_gradient_checkpointing=hardware.gradient_checkpointing
-        )
-    elif hardware.gradient_checkpointing:
-        # The kbit helper enables checkpointing and input grads for quantised
-        # models; a bf16/fp16 model needs both done explicitly or the first
-        # backward pass fails on inputs that do not require grad.
-        if hasattr(model, "gradient_checkpointing_enable"):
-            model.gradient_checkpointing_enable()
-        if hasattr(model, "enable_input_require_grads"):
-            model.enable_input_require_grads()
+    model = prepare_for_training(model, hardware)
     config = peft.LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -118,10 +127,7 @@ def continue_from_adapter(base_model: str, adapter_dir: str, hardware: HardwareC
     """Load a trained adapter for continued training (GRPO after SFT)."""
     peft = require("peft", hint=torch_hint())
     base = load_transformers_base(base_model, hardware)
-    if hardware.quant in ("nf4", "fp4"):
-        base = peft.prepare_model_for_kbit_training(
-            base, use_gradient_checkpointing=hardware.gradient_checkpointing
-        )
+    base = prepare_for_training(base, hardware)
     return peft.PeftModel.from_pretrained(base, adapter_dir, is_trainable=True)
 
 

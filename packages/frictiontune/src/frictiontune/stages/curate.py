@@ -134,8 +134,10 @@ class Curate(Stage):
                     dropped.add(existing_id)
                     # `index` was the incumbent; the agent prefers the current
                     # item, so stop comparing later items against the one we are
-                    # about to drop.
+                    # about to drop. The replacement must join the kept set, or
+                    # later near-duplicates would never be compared against it.
                     kept_indices.remove(index)
+                    kept_indices.append(current)
                 else:
                     dropped.add(current_id)
                 is_duplicate = True

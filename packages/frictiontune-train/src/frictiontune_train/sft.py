@@ -174,7 +174,9 @@ def run_sft(request: TrainingRequest) -> TrainingResult:
         if isinstance(value, (int, float))
     }
     history = [entry for entry in trainer.state.log_history if "loss" in entry]
-    train_loss = float(history[0]["loss"]) if history else 0.0
+    # Prefer the trainer's aggregate loss; the first logged step is not the
+    # training loss and reading it as such understates convergence.
+    train_loss = float(metrics.get("train_loss", history[0]["loss"] if history else 0.0))
     final_loss = float(history[-1]["loss"]) if history else 0.0
     checkpoints = sorted(str(path) for path in Path(adapter_dir).glob("checkpoint-*"))
     return TrainingResult(

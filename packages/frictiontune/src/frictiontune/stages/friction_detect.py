@@ -141,8 +141,8 @@ class FrictionDetect(Stage):
 
     async def _analyse(
         self, episode: Episode, ctx: StageContext, settings: FrictionDetectSettings
-    ) -> tuple[list[FrictionEventDraft], bool]:
-        """Run the analyst (with optional ensemble) and return drafts + abstain."""
+    ) -> tuple[list[FrictionEventDraft], bool, int]:
+        """Run the analyst (with optional ensemble); return drafts, abstain, passes."""
         role = ctx.config.role(RoleName.FRICTION_ANALYST)
         values = analyst_prompt_values(
             ctx.config,
@@ -161,7 +161,7 @@ class FrictionDetect(Stage):
             analysis = await ctx.run.gateway.complete_structured(
                 RoleName.FRICTION_ANALYST, role, _ANALYST_PROMPT, values, FrictionAnalysis
             )
-            return list(analysis.events), analysis.abstain
+            return list(analysis.events), analysis.abstain, 1
 
         sampling = role.model_copy(update={"cache": False})
         results = await asyncio.gather(
@@ -174,7 +174,7 @@ class FrictionDetect(Stage):
         )
         drafts = [draft for analysis in results for draft in analysis.events]
         threshold = max(1, round(passes / 2))
-        return _merge_ensemble(drafts, threshold=threshold), any(r.abstain for r in results)
+        return _merge_ensemble(drafts, threshold=threshold), any(r.abstain for r in results), passes
 
     async def _process(
         self, episode: Episode, ctx: StageContext, settings: FrictionDetectSettings
@@ -182,14 +182,14 @@ class FrictionDetect(Stage):
         if not await self._route(episode, ctx, settings):
             return _EpisodeOutcome(episode_id=episode.id, routed_clean=True)
 
-        drafts, abstained = await self._analyse(episode, ctx, settings)
+        drafts, abstained, passes = await self._analyse(episode, ctx, settings)
         events: list[FrictionEvent] = []
         invalid = 0
         for draft in drafts:
             event = FrictionEvent(
                 id=event_id(episode.id, len(events)),
                 episode_id=episode.id,
-                ensemble_votes=settings.ensemble,
+                ensemble_votes=passes,
                 **draft.model_dump(),
             )
             if settings.taxonomy_enforcement:

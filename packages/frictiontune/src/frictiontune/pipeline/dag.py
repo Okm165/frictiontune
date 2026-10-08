@@ -44,7 +44,7 @@ EXTENSION_EDGES: Mapping[str, tuple[str, ...]] = {
     "judge": ("synthesize", "train_grpo"),
     "decontaminate": ("train_grpo",),
     "fetch_base": ("train_grpo",),
-    "train_sft": ("rollout", "evaluate_sim_user", "evaluate_external"),
+    "train_sft": ("train_grpo", "rollout", "evaluate_sim_user", "evaluate_external"),
 }
 
 

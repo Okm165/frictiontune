@@ -13,6 +13,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from frictiontune.config.models import RoleName
+from frictiontune.core.json import dumps
 from frictiontune.domain.episodes import Episode
 from frictiontune.domain.ids import rule_id
 from frictiontune.domain.rules import CompiledRules, RuleLibrary, RuntimeRule
@@ -90,7 +91,7 @@ class CompileRules(Stage):
             {
                 "friction": _render_friction(events[: settings.max_rules_per_episode]),
                 "context": clip(render_transcript(episode.messages), settings.max_transcript_chars),
-                "tool_schemas": "\n".join(str(schema) for schema in schemas) or "(none observed)",
+                "tool_schemas": "\n".join(dumps(schema) for schema in schemas) or "(none observed)",
             },
             CompiledRules,
         )

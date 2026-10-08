@@ -134,8 +134,20 @@ class HuggingFaceTokenizer:
     def apply_chat_template(
         self, messages: Sequence[ChatMessage], *, add_generation_prompt: bool = False
     ) -> str:
-        """Render messages with the model's real chat template (as text)."""
-        payload = [{"role": message.role, "content": message.content} for message in messages]
+        """Render messages with the model's real chat template (as text).
+
+        ``name`` and ``tool_call_id`` are forwarded when present: some chat
+        templates read them for tool/function messages, and dropping them can
+        make a real template fail or mis-render the turn.
+        """
+        payload: list[dict[str, object]] = []
+        for message in messages:
+            entry: dict[str, object] = {"role": message.role, "content": message.content}
+            if message.name is not None:
+                entry["name"] = message.name
+            if message.tool_call_id is not None:
+                entry["tool_call_id"] = message.tool_call_id
+            payload.append(entry)
         rendered = self._tokenizer.apply_chat_template(
             payload, tokenize=False, add_generation_prompt=add_generation_prompt
         )
