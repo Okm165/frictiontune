@@ -8,6 +8,7 @@ orchestrator refuses to run a Tier C stage unless ``allow_gated`` is set.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import Field
@@ -20,6 +21,7 @@ from frictiontune.backends.models import (
 )
 from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.errors import StageError
+from frictiontune.core.hashing import file_sha256
 from frictiontune.domain.dataset import TrainingExample
 from frictiontune.domain.episodes import Episode, ReducedSpan
 from frictiontune.domain.friction import FrictionEvent
@@ -42,7 +44,7 @@ from frictiontune.stages.common import clip, read_events_by_episode, render_tran
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from frictiontune.pipeline.context import StageContext
+    from frictiontune.pipeline.context import RunContext, StageContext
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -839,13 +841,24 @@ class EvaluateExternal(Stage):
     )
     settings_model = EvaluateExternalSettings
 
+    def external_input_hashes(self, run: RunContext) -> list[str]:
+        """Hash each configured external corpus so a changed corpus is not cached.
+
+        The corpora are read from disk, not the artifact catalog, so without this
+        the run id would not change when a corpus file changed and a stale
+        external evaluation would be reused.
+        """
+        return [
+            file_sha256(path)
+            for path in (Path(item) for item in run.config.evaluation.external_corpora)
+            if path.is_file()
+        ]
+
     def _load_tasks(self, ctx: StageContext) -> list[dict[str, str]]:
         from frictiontune.core.json import iter_jsonl
 
         tasks: list[dict[str, str]] = []
         for path_str in ctx.config.evaluation.external_corpora:
-            from pathlib import Path
-
             path = Path(path_str)
             if not path.is_file():
                 ctx.logger.warning("external corpus missing", path=path_str)

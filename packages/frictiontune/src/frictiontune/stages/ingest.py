@@ -1,8 +1,9 @@
 """``ingest`` — read the source corpus into canonical, streamed messages.
 
-Read-only and immutable: a live agent session is never disturbed. The whole
-corpus is streamed session-by-session into JSONL through a generator, so the
-process never holds more than one session in memory.
+Read-only and immutable: a live agent session is never disturbed. Messages are
+streamed session-by-session into JSONL through a generator, and the compact
+session index is written through a sink in the same pass, so the process never
+holds a whole session's messages in memory.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from frictiontune.domain.trace import Message, Session
+    from frictiontune.domain.trace import Message
     from frictiontune.pipeline.context import RunContext, StageContext
 
 
@@ -72,7 +73,7 @@ class Ingest(Stage):
         db = _resolve_db(settings, ctx)
         corpus = OpenCodeCorpus(db)
 
-        sessions: list[Session] = []
+        session_sink = ctx.jsonl_sink("sessions")
         totals = CorpusStats()
 
         def message_rows() -> Iterator[Message]:
@@ -82,7 +83,7 @@ class Ingest(Stage):
                 if len(messages) < settings.min_messages:
                     totals.skipped += 1
                     continue
-                sessions.append(session)
+                session_sink.write(session)
                 totals.sessions += 1
                 totals.messages += stats.messages
                 totals.skipped += stats.skipped
@@ -90,8 +91,9 @@ class Ingest(Stage):
                 totals.tool_errors += stats.tool_errors
                 yield from messages
 
+        # emit_jsonl consumes the generator fully, writing sessions alongside.
         messages_ref = ctx.emit_jsonl("messages", message_rows())
-        ctx.emit_jsonl("sessions", sessions)
+        session_sink.close()
 
         report = {
             "database": str(db),
