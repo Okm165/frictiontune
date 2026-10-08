@@ -6,8 +6,9 @@ Three transforms, each split into plumbing plus judgment:
   error text verbatim (head/tail truncation would cut errors out of the middle);
 * **schema inference** — tool JSON Schemas are inferred from observed calls by an
   agent, never by merging keys;
-* **redaction** — candidate secrets are detected by regex (plumbing) and then
-  judged by an agent; over-redaction is a real cost, so the model decides.
+* **redaction** — candidate secrets are detected by regex (plumbing) across
+  every string leaf of a message, including tool-call arguments, and then judged
+  by an agent; over-redaction is a real cost, so the model decides.
 
 Messages are streamed in batches with bounded concurrency and written to a JSONL
 sink, so the whole corpus is never resident.
@@ -17,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from frictiontune.config.models import RoleName
 from frictiontune.core.json import JsonObject, dumps
@@ -28,11 +29,47 @@ from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from frictiontune.pipeline.context import StageContext
 
 _COMPACT_PROMPT = "normalize_compaction"
 _SCHEMA_PROMPT = "schema_inference"
 _REDACT_PROMPT = "redaction_review"
+
+# Structural keys never redacted: they identify the part, its role, and the tool
+# linkage, so redacting one would corrupt the message rather than protect it.
+_STRUCTURAL_KEYS = frozenset({"kind", "role", "name", "call_id", "status"})
+
+
+def _iter_string_leaves(
+    node: object, path: tuple[object, ...] = ()
+) -> Iterator[tuple[tuple[object, ...], str]]:
+    """Yield every string leaf in a JSON-like tree with its relative path."""
+    if isinstance(node, str):
+        yield path, node
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            if key in _STRUCTURAL_KEYS:
+                continue
+            yield from _iter_string_leaves(value, (*path, key))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _iter_string_leaves(value, (*path, index))
+
+
+def _get_at(node: Any, path: tuple[object, ...]) -> Any:
+    """Return the value at ``path`` in a nested JSON-like structure."""
+    for key in path:
+        node = node[key]
+    return node
+
+
+def _set_at(node: Any, path: tuple[object, ...], value: Any) -> None:
+    """Set the value at ``path`` in a nested JSON-like structure."""
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
 
 
 class NormalizeSettings(StageSettings):
@@ -119,19 +156,24 @@ class Normalize(Stage):
     async def _redact_message(
         self, message: Message, ctx: StageContext, counters: _Counters
     ) -> Message:
+        """Detect and redact secrets across every string leaf of the message.
+
+        Tool-call ``arguments`` are dumped verbatim into the trained assistant
+        content (and into the corpus), so a fixed pair of top-level fields is not
+        enough: every string leaf is scanned. A few structural keys (the part
+        ``kind`` discriminator, role, tool name, call id, status) are skipped so
+        redaction cannot break the message's structure or tool linkage.
+        """
         data = message.model_dump(mode="json")
-        found: list[tuple[int, int, str, str, int, int, str]] = []
+        found: list[tuple[int, tuple[object, ...], str, int, int, str]] = []
         for part_index, part in enumerate(data["parts"]):
-            for field in ("text", "output"):
-                value = part.get(field)
-                if not isinstance(value, str) or not value:
-                    continue
+            base: tuple[object, ...] = ("parts", part_index)
+            for relative, value in _iter_string_leaves(part):
                 for candidate in detect_candidates(value):
                     found.append(
                         (
                             len(found),
-                            part_index,
-                            field,
+                            (*base, *relative),
                             value,
                             candidate.start,
                             candidate.end,
@@ -143,7 +185,7 @@ class Normalize(Stage):
 
         lines = [
             f"{global_index} | {context_window(value, start, end)}"
-            for global_index, _pi, _field, value, start, end, _kind in found
+            for global_index, _path, value, start, end, _kind in found
         ]
         role = ctx.config.role(RoleName.COMPACTOR)
         review = await ctx.run.gateway.complete_structured(
@@ -155,18 +197,17 @@ class Normalize(Stage):
         )
         decisions = {decision.index: decision for decision in review.decisions}
 
-        by_part: dict[tuple[int, str], list[tuple[int, int, str]]] = defaultdict(list)
+        by_path: dict[tuple[object, ...], list[tuple[int, int, str]]] = defaultdict(list)
         counters.candidates += len(found)
-        for global_index, part_index, field, _value, start, end, kind in found:
+        for global_index, path, _value, start, end, kind in found:
             decision = decisions.get(global_index)
             redact = decision.redact if decision is not None else True
             if redact:
-                by_part[(part_index, field)].append((start, end, kind))
+                by_path[path].append((start, end, kind))
                 counters.redacted += 1
-        for (part_index, field), spans in by_part.items():
-            data["parts"][part_index][field] = apply_redactions(
-                data["parts"][part_index][field], spans
-            )
+        for path, spans in by_path.items():
+            original = _get_at(data, path)
+            _set_at(data, path, apply_redactions(original, spans))
         return Message.model_validate(data)
 
     async def _infer_schemas(

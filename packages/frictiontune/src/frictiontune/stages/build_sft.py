@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from frictiontune.core.errors import StageError
 from frictiontune.domain.dataset import SFTRecord, TokenStats, TrainingExample
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
@@ -29,6 +30,7 @@ class BuildSftSettings(StageSettings):
     tokenizer_path: str | None = None
     prefer_hf: bool = True
     trust_remote_code: bool = False
+    allow_fallback_tokenizer: bool = False
     include_reasoning_context: bool = True
     train_reasoning: bool = False
     max_seq_len: int = 8_192
@@ -49,8 +51,9 @@ def build_record(
     tokenizer: Tokenizer,
     *,
     settings: BuildSftSettings,
-) -> tuple[SFTRecord, bool]:
-    """Render one example into a tokenized record and report truncation."""
+    tokenizer_kind: str,
+) -> tuple[SFTRecord, bool, int]:
+    """Render one example into a tokenized record; report truncation and trained tokens."""
     context = to_chat_messages(
         example.context, include_reasoning=settings.include_reasoning_context
     )
@@ -59,15 +62,21 @@ def build_record(
     flags = [False] * len(context) + [message.role == "assistant" for message in completion]
     rendered = render_chat(tokenizer, messages, flags)
     fitted = fit_and_label(rendered, settings.max_seq_len)
+    trained = sum(1 for label in fitted.labels if label != IGNORE_INDEX)
     record = SFTRecord(
         id=example.id,
         source=example.source,
         track=example.track,
         input_ids=fitted.input_ids,
         labels=fitted.labels,
-        meta={**example.meta, "truncated": fitted.truncated},
+        meta={
+            **example.meta,
+            "truncated": fitted.truncated,
+            "tokenizer": tokenizer_kind,
+            "trained_tokens": trained,
+        },
     )
-    return record, fitted.truncated
+    return record, fitted.truncated, trained
 
 
 class BuildSft(Stage):
@@ -95,17 +104,34 @@ class BuildSft(Stage):
             prefer_hf=settings.prefer_hf,
             trust_remote_code=settings.trust_remote_code,
         )
+        if used_fallback and not settings.allow_fallback_tokenizer:
+            raise StageError(
+                "build_sft",
+                "the base model tokenizer is unavailable, so token ids would be "
+                "meaningless hashes; set stages.build_sft.tokenizer_path to the "
+                "base model tokenizer, or set allow_fallback_tokenizer: true to "
+                "build a throwaway dataset (e.g. for tests)",
+            )
+        tokenizer_kind = "fallback" if used_fallback else "huggingface"
         sink = ctx.jsonl_sink("sft")
         stats = TokenStats()
         lengths: list[int] = []
+        skipped_empty = 0
 
         for example in ctx.catalog.stream("judged", TrainingExample):
             if not example.kept:
                 continue
-            record, truncated = build_record(example, tokenizer, settings=settings)
+            record, truncated, trained = build_record(
+                example, tokenizer, settings=settings, tokenizer_kind=tokenizer_kind
+            )
+            # A record with no trained token (e.g. a reasoning-only completion
+            # when reasoning is masked) contributes no gradient and can poison a
+            # batch; drop it and count it.
+            if trained == 0:
+                skipped_empty += 1
+                continue
             sink.write(record)
             length = len(record.input_ids)
-            trained = sum(1 for label in record.labels if label != IGNORE_INDEX)
             stats.examples += 1
             stats.total_tokens += length
             stats.masked_tokens += length - trained
@@ -126,11 +152,12 @@ class BuildSft(Stage):
             "report.md",
             "# Build SFT\n\n"
             f"- examples: {stats.examples}\n"
+            f"- skipped (no trained tokens): {skipped_empty}\n"
             f"- total tokens: {stats.total_tokens}\n"
             f"- trained tokens: {stats.trained_tokens} "
             f"({stats.train_ratio() * 100:.1f}%)\n"
             f"- truncated: {stats.truncated}\n"
-            f"- tokenizer: {'fallback' if used_fallback else 'huggingface'}\n"
+            f"- tokenizer: {tokenizer_kind}\n"
             f"- train reasoning: {settings.train_reasoning}\n",
         )
         notes = ["used fallback tokenizer; counts are approximate"] if used_fallback else []
@@ -138,6 +165,7 @@ class BuildSft(Stage):
             ctx,
             metrics={
                 "examples": float(stats.examples),
+                "skipped_empty": float(skipped_empty),
                 "total_tokens": float(stats.total_tokens),
                 "trained_tokens": float(stats.trained_tokens),
                 "truncated": float(stats.truncated),

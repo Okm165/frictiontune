@@ -2,7 +2,8 @@
 
 Labels use ``-100`` (the PyTorch ignore index) on every non-trained token so the
 loss is computed only over the assistant behaviour we want to teach. Fitting
-prefers to keep the trained span intact, trimming the context tail first.
+keeps the trained span and as much surrounding context as the window allows,
+dropping only the far tail.
 """
 
 from __future__ import annotations
@@ -36,9 +37,10 @@ def build_labels(rendered: RenderedChat, *, ignore_index: int = IGNORE_INDEX) ->
 def fit_window(rendered: RenderedChat, max_seq_len: int) -> RenderedChat:
     """Trim a rendered chat to ``max_seq_len`` tokens, preserving the trained span.
 
-    If the trained span alone exceeds the window, its tail is kept (the end of
-    the behaviour is what matters most); otherwise context is trimmed from the
-    front, then the tail, around the trained span.
+    The trained span always survives. If the span alone is longer than the
+    window its tail is kept (the end of the behaviour is what matters most);
+    otherwise the window is placed to keep the span with as much preceding
+    context as fits, and only tokens past the window tail are dropped.
     """
     length = len(rendered.input_ids)
     if length <= max_seq_len:

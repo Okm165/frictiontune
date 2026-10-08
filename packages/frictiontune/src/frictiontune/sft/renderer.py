@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from frictiontune.core.json import dumps
 from frictiontune.domain.trace import (
     CompactionPart,
+    FileRefPart,
     Message,
     ReasoningPart,
     SystemPart,
@@ -73,6 +74,16 @@ class RenderedChat(BaseModel):
             raise ValueError("input_ids and assistant_mask length mismatch")
 
 
+def _text_fragment(part: object) -> str:
+    """Render one non-reasoning part to text, or ``""`` for a non-text part."""
+    if isinstance(part, FileRefPart):
+        suffix = f" {part.description}" if part.description else ""
+        return f"[file: {part.path}]{suffix}"
+    if isinstance(part, (TextPart, SystemPart, CompactionPart)):
+        return part.text
+    return ""
+
+
 def _assistant_content(message: Message, *, include_reasoning: bool) -> str:
     """Render an assistant message, preserving text, reasoning, and tool calls.
 
@@ -85,10 +96,12 @@ def _assistant_content(message: Message, *, include_reasoning: bool) -> str:
         if isinstance(part, ReasoningPart):
             if include_reasoning and part.text:
                 chunks.append(f"{_REASONING_OPEN}\n{part.text}\n{_REASONING_CLOSE}")
-        elif isinstance(part, (TextPart, SystemPart, CompactionPart)) and part.text:
-            chunks.append(part.text)
         elif isinstance(part, ToolPart):
             chunks.append(_render_tool_call(part))
+        else:
+            fragment = _text_fragment(part)
+            if fragment:
+                chunks.append(fragment)
     return "\n".join(chunks).strip()
 
 
@@ -127,11 +140,15 @@ def to_chat_messages(
             chat.extend(results)
         else:
             content = "\n".join(
-                part.text
-                for part in message.parts
-                if isinstance(part, (TextPart, SystemPart, CompactionPart)) and part.text
+                fragment
+                for fragment in (_text_fragment(part) for part in message.parts)
+                if fragment
             )
-            chat.append(ChatMessage(role=message.role, content=content))
+            # A message that reduces to no content (an idle marker, an empty
+            # turn) is dropped rather than emitted as an empty chat turn, which
+            # adds no signal and can confuse a template.
+            if content:
+                chat.append(ChatMessage(role=message.role, content=content))
     return chat
 
 
@@ -143,9 +160,10 @@ def render_chat(
     """Tokenize ``messages`` and mask every token not in a trained message.
 
     The template is applied incrementally: each step re-renders the prefix and
-    keeps only the newly appended tokens. This is correct for the standard
-    monotonic chat templates (ChatML, Llama, Qwen) and is O(n²) in message count,
-    which is negligible next to model calls.
+    keeps only the newly appended tokens. This is correct for prefix-stable,
+    append-only templates (ChatML, Llama, Qwen). The prefix is verified on every
+    step, so a template that coalesces or rewrites earlier text raises instead of
+    silently attaching a mask to the wrong tokens. It is O(n²) in message count.
     """
     if len(messages) != len(trained_flags):
         raise ValueError("messages and trained_flags length mismatch")
@@ -156,6 +174,11 @@ def render_chat(
     for index, _message in enumerate(messages):
         rendered = tokenizer.apply_chat_template(list(messages[: index + 1]))
         current = tokenizer.encode(rendered, add_special_tokens=False)
+        if previous_length and current[:previous_length] != input_ids:
+            raise ValueError(
+                "chat template is not prefix-stable: tokenizing a longer prefix "
+                "changed earlier tokens, so the training mask cannot be trusted"
+            )
         appended = current[previous_length:]
         input_ids.extend(appended)
         assistant_mask.extend([bool(trained_flags[index])] * len(appended))
