@@ -105,8 +105,14 @@ class Orchestrator:
         if missing:
             raise StageError(name, f"missing input artifact(s): {missing}")
 
-        input_refs = {key: self.run.catalog.get(key).ref for key in spec.inputs}
-        input_hashes = self.run.catalog.hashes(tuple(spec.inputs))
+        # Optional inputs are consumed only when present; whether they are present
+        # feeds the run id so a stale manifest is never reused after a gated
+        # extension has produced (or changed) one of them.
+        optional_present = [key for key in spec.optional_inputs if self.run.catalog.has(key)]
+        consumed = (*spec.inputs, *optional_present)
+
+        input_refs = {key: self.run.catalog.get(key).ref for key in consumed}
+        input_hashes = self.run.catalog.hashes(consumed)
         input_hashes.extend(stage.external_input_hashes(self.run))
 
         # The run id must change whenever *anything* that affects the stage's
@@ -134,7 +140,7 @@ class Orchestrator:
 
         ctx = StageContext(run=self.run, stage=name, run_id=run_id, store=store)
         log = ctx.logger.bind(tier=spec.tier.value)
-        log.info("stage start", inputs=list(spec.inputs))
+        log.info("stage start", inputs=list(consumed))
         started = utc_now()
         tick = time.monotonic()
         result = await stage.run(ctx)

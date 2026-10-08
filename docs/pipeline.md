@@ -146,7 +146,8 @@ Produces `TrainingCandidate`s.
 
 ### `judge`
 
-**In:** `candidates`.
+**In:** `candidates`; optionally `sft_raft`, `synthetic` (when the gated
+extensions that emit them have run).
 **Out:** `judged` (JSONL), `judge_report` (JSON).
 **Cost:** mixed · high API.
 
@@ -154,7 +155,9 @@ The shared quality gate every candidate must pass — mined or synthetic. LIMA's
 lesson is that unfiltered data actively hurts, so the gate is strict: a rubric of
 five 0–5 axes *(judged)*, an explicit accept decision, and a deterministic
 post-check that a model cannot over-accept a candidate it scored as
-disqualifying on adherence or correctness *(plumbing)*.
+disqualifying on adherence or correctness *(plumbing)*. The optional inputs are
+present-only: a core run gates just the mined candidates, while a run that also
+produced RAFT/synthetic data gates those through the same rubric.
 
 ### `build_sft`
 

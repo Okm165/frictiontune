@@ -57,6 +57,10 @@ class Judge(Stage):
         evidence=["LIMA 2305.11206"],
         cost=CostProfile(compute="llm", api_usd="high", maintenance="low"),
         inputs={"candidates": "jsonl"},
+        # Gated data tracks (RAFT success examples, synthesized coverage) are
+        # folded into the same gate when their producers have run. They are
+        # optional so a core run never depends on a Tier C stage.
+        optional_inputs={"sft_raft": "jsonl", "synthetic": "jsonl"},
         outputs={"judged": "jsonl", "judge_report": "json"},
         kill_criterion=(
             "Relax the threshold only if training shows under-fitting from too little data."
@@ -109,10 +113,11 @@ class Judge(Stage):
                 kept += int(accepted)
             batch.clear()
 
-        for candidate in ctx.catalog.stream("candidates", TrainingExample):
-            batch.append(candidate)
-            if len(batch) >= settings.batch_size:
-                await flush()
+        for source in ("candidates", *(k for k in self.spec.optional_inputs if ctx.catalog.has(k))):
+            for candidate in ctx.catalog.stream(source, TrainingExample):
+                batch.append(candidate)
+                if len(batch) >= settings.batch_size:
+                    await flush()
         await flush()
         sink.close()
 

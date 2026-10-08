@@ -56,6 +56,11 @@ class StageSpec(DomainModel):
     evidence: list[str]
     cost: CostProfile
     inputs: dict[str, str] = Field(default_factory=dict)
+    # Optional inputs never make a stage un-runnable: they are consumed (and
+    # hashed into the run id) only when the artifact is present. They exist so a
+    # core stage can fold in data produced by a gated extension without forcing
+    # that extension on every run. Ordering is expressed with soft graph edges.
+    optional_inputs: dict[str, str] = Field(default_factory=dict)
     outputs: dict[str, str] = Field(default_factory=dict)
     kill_criterion: str = ""
     requires_llm: bool = False
@@ -65,3 +70,9 @@ class StageSpec(DomainModel):
     def core(self) -> bool:
         """Whether the stage belongs to the default core run."""
         return self.lead is Lead.CORE
+
+    def input_label(self) -> str:
+        """Human-readable input list; optional inputs are marked with ``?``."""
+        parts = list(self.inputs)
+        parts.extend(f"{name}?" for name in self.optional_inputs)
+        return ", ".join(parts) or "-"

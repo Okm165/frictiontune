@@ -58,12 +58,14 @@ rationales — the Preference Profile that `synthesize` targets.
 
 ## `synthesize` — synthetic coverage
 
-**In:** `preference_profile`, `judged` → **Out:** `synthetic` (JSONL),
+**In:** `preference_profile`, `candidates` → **Out:** `synthetic` (JSONL),
 `synthesize_report` (JSON). Requires LLM.
 
 Generates friction-avoiding training examples per behaviour dimension, seeded by
-real judged examples. Synthetic examples go through the same `judge` gate as
-mined ones.
+real mined recoveries (the `candidates` that `mine` extracted). The `synthetic`
+examples go through the same `judge` gate as mined ones — `judge` consumes
+`synthetic` as an optional input — so nothing generated reaches training without
+passing the gate.
 
 *Gate:* mined recoveries may already cover the needed behaviours.
 *Kill:* drop if synthetic examples fail the judge at a higher rate than mined ones.
@@ -75,7 +77,8 @@ mined ones.
 
 Builds success-track examples from **clean episodes** (those without friction
 events), following RAFT/SRFT. Purely deterministic selection over the trace.
-Success examples give the model a positive track alongside recovered failures.
+Success examples give the model a positive track alongside recovered failures and
+are folded into the same `judge` gate as an optional input.
 
 *Gate:* recovery data may be sufficient on its own.
 *Kill:* drop if success-track data shifts the model away from recovery behaviour.

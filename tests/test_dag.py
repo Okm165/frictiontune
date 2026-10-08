@@ -51,3 +51,42 @@ def test_core_graph_is_acyclic_and_orders_the_data_path() -> None:
 def test_unknown_stage_is_rejected() -> None:
     with pytest.raises(ConfigError):
         full_graph().order(["does_not_exist"])
+
+
+def test_judge_hard_dependencies_are_mined_candidates_only() -> None:
+    # The gated producers are *optional* inputs, so they must not become hard
+    # dependencies that a core closure is forced to pull in.
+    assert full_graph().predecessors("judge") == ("mine",)
+
+
+def test_optional_edges_do_not_force_gated_producers_into_a_closure() -> None:
+    closure = set(full_graph().closure(["judge"]))
+
+    assert "judge" in closure
+    assert {"synthesize", "raft_srft", "friction_cluster"}.isdisjoint(closure)
+
+
+def test_optional_edges_still_order_producers_before_the_judge() -> None:
+    order = full_graph().order(
+        [
+            "ingest",
+            "normalize",
+            "segment",
+            "friction_detect",
+            "mine",
+            "friction_cluster",
+            "synthesize",
+            "raft_srft",
+            "judge",
+            "build_sft",
+        ]
+    )
+
+    assert order.index("raft_srft") < order.index("judge")
+    assert order.index("synthesize") < order.index("judge")
+    assert order.index("friction_cluster") < order.index("synthesize")
+
+
+def test_core_graph_has_no_extension_ordering() -> None:
+    assert "synthesize" not in core_graph().predecessors("judge")
+    assert "raft_srft" not in core_graph().predecessors("judge")

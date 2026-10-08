@@ -90,7 +90,7 @@ class PipelineView(App[None]):
                 spec.lead.value,
                 spec.roi,
                 spec.cost.compute,
-                ", ".join(spec.inputs) or "-",
+                spec.input_label(),
                 ", ".join(spec.outputs) or "-",
             )
 

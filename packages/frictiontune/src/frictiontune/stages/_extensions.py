@@ -363,7 +363,7 @@ class Synthesize(Stage):
         ),
         evidence=["RAFT/SRFT synthesis; PRIME"],
         cost=CostProfile(compute="llm", api_usd="medium", maintenance="medium"),
-        inputs={"preference_profile": "json", "judged": "jsonl"},
+        inputs={"preference_profile": "json", "candidates": "jsonl"},
         outputs={"synthetic": "jsonl", "synthesize_report": "json"},
         kill_criterion=(
             "Drop if synthetic examples fail the judge at a higher rate than mined ones."
@@ -374,7 +374,7 @@ class Synthesize(Stage):
 
     def _seed_index(self, ctx: StageContext) -> dict[str, str]:
         seeds: dict[str, str] = {}
-        for example in ctx.catalog.stream("judged", TrainingExample):
+        for example in ctx.catalog.stream("candidates", TrainingExample):
             event_id = str(example.meta.get("event_id", ""))
             if event_id and event_id not in seeds:
                 seeds[event_id] = render_transcript(example.completion)

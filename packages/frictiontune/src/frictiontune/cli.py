@@ -136,7 +136,7 @@ def stages(
             spec.lead.value,
             spec.roi,
             spec.cost.compute,
-            ", ".join(spec.inputs) or "-",
+            spec.input_label(),
             ", ".join(spec.outputs) or "-",
         )
     console.print(table)

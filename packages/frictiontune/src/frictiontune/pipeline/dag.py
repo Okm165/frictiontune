@@ -41,8 +41,19 @@ EXTENSION_EDGES: Mapping[str, tuple[str, ...]] = {
     "segment": ("reduce", "raft_srft"),
     "friction_detect": ("attribute", "friction_cluster", "raft_srft"),
     "friction_cluster": ("synthesize",),
-    "judge": ("synthesize", "train_grpo"),
+    "mine": ("synthesize",),
+    "judge": ("train_grpo",),
     "train_sft": ("train_grpo", "rollout", "evaluate_sim_user", "evaluate_external"),
+}
+
+# Soft ordering edges: producer → consumer. They sequence the two stages when
+# both are selected but do *not* create a dependency, so a core run of ``judge``
+# is never forced to pull a Tier C producer in. They pair with a stage's
+# ``optional_inputs``: `judge` folds in ``sft_raft``/``synthetic`` when the
+# gated extensions that emit them have run.
+OPTIONAL_EDGES: Mapping[str, tuple[str, ...]] = {
+    "raft_srft": ("judge",),
+    "synthesize": ("judge",),
 }
 
 
@@ -56,19 +67,33 @@ def _merge_edges(
 
 
 class DependencyGraph:
-    """A directed acyclic graph over stage names."""
+    """A directed acyclic graph over stage names.
 
-    def __init__(self, edges: Mapping[str, Iterable[str]]) -> None:
-        """Build the graph from a producer-to-consumers adjacency map."""
+    Hard edges are producer → consumer dependencies: they are traversed by
+    :meth:`closure`. Optional edges only constrain :meth:`order` (so a soft
+    producer still runs before its consumer when both are selected); they are
+    invisible to :meth:`closure` and :meth:`predecessors`.
+    """
+
+    def __init__(
+        self,
+        edges: Mapping[str, Iterable[str]],
+        optional_edges: Mapping[str, Iterable[str]] | None = None,
+    ) -> None:
+        """Build the graph from producer-to-consumers adjacency maps."""
         self._edges: dict[str, tuple[str, ...]] = {
             node: tuple(sorted(set(targets))) for node, targets in edges.items()
         }
-        self._nodes: set[str] = set(self._edges) | {
-            target for targets in self._edges.values() for target in targets
+        ordering = dict(self._edges)
+        for node, targets in (optional_edges or {}).items():
+            ordering[node] = tuple(sorted(set(ordering.get(node, ())) | set(targets)))
+        self._ordering = ordering
+        self._nodes: set[str] = set(ordering) | {
+            target for targets in ordering.values() for target in targets
         }
 
     def predecessors(self, node: str) -> tuple[str, ...]:
-        """Direct upstream stages of ``node``."""
+        """Direct upstream stages of ``node`` (hard dependencies only)."""
         return tuple(sorted(src for src, targets in self._edges.items() if node in targets))
 
     def order(self, selected: Sequence[str]) -> list[str]:
@@ -84,7 +109,7 @@ class DependencyGraph:
 
         indegree: dict[str, int] = dict.fromkeys(chosen, 0)
         for node in chosen:
-            for target in self._edges.get(node, ()):
+            for target in self._ordering.get(node, ()):
                 if target in chosen:
                     indegree[target] += 1
 
@@ -93,7 +118,7 @@ class DependencyGraph:
         while ready:
             node = ready.pop(0)
             ordered.append(node)
-            for target in self._edges.get(node, ()):
+            for target in self._ordering.get(node, ()):
                 if target in chosen:
                     indegree[target] -= 1
                     if indegree[target] == 0:
@@ -125,4 +150,4 @@ def core_graph() -> DependencyGraph:
 
 def full_graph() -> DependencyGraph:
     """The graph over every registered stage, core and extension alike."""
-    return DependencyGraph(_merge_edges(CORE_EDGES, EXTENSION_EDGES))
+    return DependencyGraph(_merge_edges(CORE_EDGES, EXTENSION_EDGES), optional_edges=OPTIONAL_EDGES)

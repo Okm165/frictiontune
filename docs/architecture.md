@@ -106,7 +106,11 @@ or an upstream input and the run id changes, so the stage re-runs.
 The graph is declared in `frictiontune.pipeline.dag`:
 
 * `CORE_EDGES` — the 15-stage default data path.
-* `EXTENSION_EDGES` — edges that attach the Tier C extensions.
+* `EXTENSION_EDGES` — hard edges that attach the Tier C extensions.
+* `OPTIONAL_EDGES` — soft ordering edges for stages that consume a gated
+  extension's output *optionally* (e.g. `judge` folding in `sft_raft` /
+  `synthetic`): they order the two stages when both run but never force a core
+  run to pull a gated producer in.
 * `core_graph()` / `full_graph()` — `DependencyGraph` instances over them.
 
 The orchestrator re-derives execution order from the graph; the order in the
