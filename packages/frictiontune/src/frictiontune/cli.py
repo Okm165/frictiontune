@@ -302,14 +302,42 @@ def dashboard(
     except FrictionTuneError as exc:
         raise _fail(str(exc)) from exc
     pipeline_dir = config.paths.artifacts_dir / pipeline
-    for stage_dir in sorted(pipeline_dir.glob("evaluate_replay/*")):
-        candidate = next(iter(stage_dir.glob("dashboard*")), None)
-        if candidate is not None:
-            console.print(
-                render_dashboard(ReplayDashboard.model_validate_json(candidate.read_text()))
-            )
-            return
-    raise _fail("no dashboard artifact found; run the evaluate_replay stage first")
+    candidate = _latest_dashboard(pipeline_dir)
+    if candidate is None:
+        raise _fail("no dashboard artifact found; run the evaluate_replay stage first")
+    console.print(render_dashboard(ReplayDashboard.model_validate_json(candidate.read_text())))
+
+
+def _latest_dashboard(pipeline_dir: Path) -> Path | None:
+    """Return the dashboard of the most recent ``evaluate_replay`` run.
+
+    The run manifest names the exact run the last execution used, so prefer it.
+    Run ids are content hashes with no temporal order, so a lexical scan would
+    otherwise surface an arbitrary (possibly stale) run; fall back to the newest
+    run directory by mtime when no manifest is available.
+    """
+    manifest_path = pipeline_dir / "manifest.json"
+    if manifest_path.is_file():
+        manifest = read_run_manifest(manifest_path)
+        for entry in reversed(manifest.stages):
+            if entry.stage != "evaluate_replay":
+                continue
+            named = pipeline_dir / "evaluate_replay" / entry.run_id
+            if named.is_dir():
+                found = next(iter(named.glob("dashboard*")), None)
+                if found is not None:
+                    return found
+            break
+    run_dirs = sorted(
+        (path for path in pipeline_dir.glob("evaluate_replay/*") if path.is_dir()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for stage_dir in run_dirs:
+        found = next(iter(stage_dir.glob("dashboard*")), None)
+        if found is not None:
+            return found
+    return None
 
 
 @app.command()
