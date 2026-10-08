@@ -6,7 +6,17 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from frictiontune.core.json import JsonObject
+from frictiontune.core.json import JsonObject, dumps
+
+_TOOL_ARGS_LIMIT = 400
+
+
+def _inline_arguments(arguments: JsonObject) -> str:
+    """Render tool arguments compactly, bounded so a large payload cannot crowd out output."""
+    rendered = dumps(arguments)
+    if len(rendered) <= _TOOL_ARGS_LIMIT:
+        return rendered
+    return rendered[:_TOOL_ARGS_LIMIT] + f"… [+{len(rendered) - _TOOL_ARGS_LIMIT} chars]"
 
 
 class DomainModel(BaseModel):
@@ -98,7 +108,11 @@ class Message(DomainModel):
                 if part.text:
                     chunks.append(part.text)
             elif isinstance(part, ToolPart):
-                chunks.append(f"[tool:{part.name}] {part.output or ''}")
+                call = f"[tool:{part.name}"
+                if part.arguments:
+                    call += f" {_inline_arguments(part.arguments)}"
+                call += "]"
+                chunks.append(f"{call} {part.output or ''}".rstrip())
         return "\n".join(chunks)
 
     def has_tool_error(self) -> bool:

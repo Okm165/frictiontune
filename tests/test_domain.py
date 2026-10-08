@@ -41,6 +41,32 @@ def test_content_text_concatenates_text_bearing_parts() -> None:
     assert "[tool:read] file body" in text
 
 
+def test_content_text_includes_bounded_tool_arguments() -> None:
+    message = _message(
+        [
+            {
+                "kind": "tool",
+                "name": "bash",
+                "arguments": {"command": "pytest -q"},
+                "output": "1 failed",
+            }
+        ]
+    )
+
+    assert message.content_text() == '[tool:bash {"command":"pytest -q"}] 1 failed'
+
+
+def test_content_text_bounds_huge_tool_arguments() -> None:
+    message = _message(
+        [{"kind": "tool", "name": "write", "arguments": {"content": "x" * 5_000}, "output": "ok"}]
+    )
+
+    text = message.content_text()
+
+    assert "chars]" in text  # the explicit truncation marker
+    assert text.endswith("ok")  # output is never crowded out
+
+
 def test_has_tool_error_detects_failed_tool() -> None:
     ok = _message([{"kind": "tool", "name": "read", "output": "fine"}])
     bad = _message([{"kind": "tool", "name": "bash", "output": "boom", "is_error": True}])
