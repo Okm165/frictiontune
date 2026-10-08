@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pydantic import Field
+
 from frictiontune.config.models import RoleName
 from frictiontune.core.errors import BackendUnavailableError
 from frictiontune.core.stats import cosine
@@ -39,7 +41,7 @@ class DecontaminateSettings(StageSettings):
     # correlated neighbour so semantic contamination reaches the judge; raise it
     # to trade recall for fewer judge calls. It never decides the drop itself.
     retrieval_floor: float = 0.0
-    embed_batch: int = 64
+    embed_batch: int = Field(default=64, ge=1)
     max_text_chars: int = 20_000
     max_train_ngrams: int = 2_000_000
 

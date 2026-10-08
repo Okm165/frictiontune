@@ -102,3 +102,21 @@ def test_stage_settings_reject_unknown_knob(config_dir: Path) -> None:
 
     with pytest.raises(ConfigError, match="invalid config for stage 'curate'"):
         validate_stage_settings(config, default_registry())
+
+
+@pytest.mark.parametrize(
+    ("stage", "knob"),
+    [
+        ("curate", "embed_batch"),
+        ("decontaminate", "embed_batch"),
+        ("reduce", "chunk_turns"),
+        ("build_sft", "max_seq_len"),
+    ],
+)
+def test_zero_valued_loop_bounds_are_rejected_up_front(
+    config_dir: Path, stage: str, knob: str
+) -> None:
+    config = load_config(config_dir, overrides={"stages": {stage: {knob: 0}}})
+
+    with pytest.raises(ConfigError, match=f"invalid config for stage '{stage}'"):
+        validate_stage_settings(config, default_registry())

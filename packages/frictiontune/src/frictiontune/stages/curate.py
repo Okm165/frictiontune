@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pydantic import Field
+
 from frictiontune.config.models import RoleName
 from frictiontune.core.errors import BackendUnavailableError
 from frictiontune.core.hashing import content_hash
@@ -38,7 +40,7 @@ class CurateSettings(StageSettings):
     retrieval_floor: float = 0.0
     retrieve_k: int = 5
     compare_window: int = 64
-    embed_batch: int = 64
+    embed_batch: int = Field(default=64, ge=1)
     max_text_chars: int = 20_000
 
 

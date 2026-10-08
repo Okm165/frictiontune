@@ -99,7 +99,7 @@ class ReduceSettings(StageSettings):
     """Knobs for episode-span reduction."""
 
     min_chars: int = 40_000
-    chunk_turns: int = 40
+    chunk_turns: int = Field(default=40, ge=1)
     batch_size: int = 16
 
 

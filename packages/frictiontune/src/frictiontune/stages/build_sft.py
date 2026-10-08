@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pydantic import Field
+
 from frictiontune.core.errors import StageError
 from frictiontune.domain.dataset import SFTRecord, TokenStats, TrainingExample
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
@@ -33,7 +35,7 @@ class BuildSftSettings(StageSettings):
     allow_fallback_tokenizer: bool = False
     include_reasoning_context: bool = True
     train_reasoning: bool = False
-    max_seq_len: int = 8_192
+    max_seq_len: int = Field(default=8_192, ge=1)
     batch_size: int = 64
 
 
