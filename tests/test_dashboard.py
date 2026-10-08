@@ -75,3 +75,11 @@ def test_signal_is_not_significant_when_the_interval_crosses_zero() -> None:
     signal = make_signal("noisy", [0.0, 10.0], [5.0, 5.0], direction="lower_better")
 
     assert not signal.significant
+
+
+def test_signal_from_a_single_pair_is_never_significant() -> None:
+    # One pair yields a degenerate interval [d, d]; it cannot support a claim.
+    signal = make_signal("one", [1.0], [0.0], direction="lower_better")
+
+    assert signal.improved
+    assert not signal.significant

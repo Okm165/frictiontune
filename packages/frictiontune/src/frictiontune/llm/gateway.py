@@ -210,10 +210,9 @@ class LlmGateway:
 
         Validation is strict: a stringified number or boolean is a malformed
         reply, not something to coerce. A reply may contain more than one
-        top-level object (an example followed by the answer); the first
-        candidate that validates against the schema wins, so a schema-shaped
-        example is never mistaken for the answer. The problem string is concise
-        and fed back to the model by the repair loop.
+        top-level object; the first candidate that validates against the schema
+        wins, because the contract asks the model for exactly one object. The
+        problem string is concise and fed back to the model by the repair loop.
         """
         candidates = list(iter_json_objects(text))
         if not candidates:

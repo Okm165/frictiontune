@@ -89,8 +89,12 @@ def make_signal(
     ci_low, ci_high = bootstrap_ci(deltas, seed=seed)
     delta = mean(deltas)
     # A movement is only significant when the bootstrap interval for the paired
-    # deltas excludes zero; `improved` alone just reads the sign of the mean.
-    significant = (ci_low > 0.0 and ci_high > 0.0) or (ci_low < 0.0 and ci_high < 0.0)
+    # deltas excludes zero; `improved` alone just reads the sign of the mean. A
+    # single pair has a degenerate interval [d, d] and cannot support a claim of
+    # significance, so at least two pairs are required.
+    significant = len(deltas) >= 2 and (
+        (ci_low > 0.0 and ci_high > 0.0) or (ci_low < 0.0 and ci_high < 0.0)
+    )
     return Signal(
         name=name,
         baseline=mean(baseline_values),
