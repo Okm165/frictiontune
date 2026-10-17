@@ -13,6 +13,7 @@ import pytest
 from frictiontune.config.loader import load_config
 from frictiontune.config.models import RoleName
 from frictiontune.core.errors import StageError
+from frictiontune.llm.messages import ChatMessage
 from frictiontune.stages.evaluate_replay import (
     EvaluateReplay,
     EvaluateReplaySettings,
@@ -122,3 +123,67 @@ def test_empty_holdout_note_names_contamination_when_it_happened() -> None:
 
     note = emitted["dashboard"].notes[0]
     assert "3 record(s) and all of them were then dropped as training leaks" in note
+
+
+def _rules_ctx(rules: list[dict[str, Any]] | None) -> Any:
+    """A stub catalog exposing (or not exposing) the rules artifact."""
+    return cast(
+        "Any",
+        SimpleNamespace(
+            catalog=SimpleNamespace(
+                has=lambda name: rules is not None and name == "rules_verified",
+                read_json=lambda name: {"generated_from": "compile_rules", "rules": rules},
+            )
+        ),
+    )
+
+
+def _rule(identifier: str, status: str = "active") -> dict[str, Any]:
+    return {
+        "id": identifier,
+        "applicability": "when a claim rests on an external value",
+        "instruction": f"verify at the source ({identifier})",
+        "scope": {"task_tags": [], "tools": [], "paths": []},
+        "verifier": {"tier": "semantic", "spec": "check the turn", "evidence": []},
+        "rationale": "observed friction",
+        "status": status,
+    }
+
+
+def test_active_rules_render_and_candidates_are_excluded() -> None:
+    from frictiontune.stages.evaluate_replay import _load_active_rules
+
+    ctx = _rules_ctx([_rule("r1"), _rule("r2", status="candidate")])
+    text = _load_active_rules(ctx, EvaluateReplaySettings())
+
+    assert "verify at the source (r1)" in text
+    assert "r2" not in text
+    assert text.startswith("## Runtime rules")
+
+
+def test_inject_rules_without_the_artifact_fails_loudly() -> None:
+    # A rules-free replay silently passing as a rules-injected one would be a
+    # mislabeled measurement; the setting must fail without the artifact.
+    from frictiontune.core.errors import StageError
+    from frictiontune.stages.evaluate_replay import _load_active_rules
+
+    with pytest.raises(StageError, match="no rules_verified artifact"):
+        _load_active_rules(_rules_ctx(None), EvaluateReplaySettings())
+
+
+def test_rules_go_in_front_within_the_same_budget() -> None:
+    from frictiontune.stages.evaluate_replay import _messages_with_rules
+
+    conversation = [
+        ChatMessage(role="user", content="x" * 600),
+        ChatMessage(role="assistant", content="y" * 600),
+    ]
+    rules = "R" * 500
+
+    injected = _messages_with_rules(list(conversation), rules, max_context_chars=1_500)
+
+    assert injected[0].role == "system" and injected[0].content == rules
+    total = sum(len(message.content) for message in injected)
+    assert total <= 1_500
+    # The most recent turns survive; the budget came out of the oldest.
+    assert injected[-1].content == "y" * 600

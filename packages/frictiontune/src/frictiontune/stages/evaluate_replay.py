@@ -16,6 +16,8 @@ from frictiontune.core.errors import ConfigError, StageError
 from frictiontune.core.json import json_block_validity
 from frictiontune.domain.dataset import SFTRecord, TrainingExample
 from frictiontune.domain.responses import ReplayVerdict
+from frictiontune.domain.rules import RuleStatus, RuntimeRule
+from frictiontune.llm.messages import ChatMessage
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 from frictiontune.reporting.dashboard import Direction, build_dashboard, make_signal
@@ -26,7 +28,6 @@ from frictiontune.stages.common import clip, render_transcript
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from frictiontune.llm.messages import ChatMessage
     from frictiontune.pipeline.context import StageContext
 
 _JUDGE_PROMPT = "replay_judge"
@@ -48,6 +49,56 @@ class EvaluateReplaySettings(StageSettings):
     max_generation_chars: int = 20_000
     sampling_temperature: float = 0.0
     max_tokens: int = 1_024
+    # Inject the verified runtime rules into the replay context on BOTH sides
+    # (GAP-095). The rules are the project's other deliverable; measuring the
+    # adapter without them answers a question nobody is deploying. Off by
+    # default so the weights-only comparison stays the baseline instrument.
+    inject_rules: bool = False
+    max_rules_chars: int = 12_000
+
+
+def _load_active_rules(ctx: StageContext, settings: EvaluateReplaySettings) -> str:
+    """Render the verified-active rules into a system block.
+
+    Fails loudly when ``inject_rules`` is set but no rules exist: a rules-free
+    replay silently passing as a rules-injected one would be a mislabeled
+    measurement, which is worse than a failed phase.
+    """
+    if not ctx.catalog.has("rules_verified"):
+        raise StageError(
+            "evaluate_replay",
+            "inject_rules is set but no rules_verified artifact exists; "
+            "run verify_rules first or unset inject_rules",
+        )
+    payload = ctx.catalog.read_json("rules_verified")
+    rules = payload.get("rules", []) if isinstance(payload, dict) else []
+    active = [
+        RuntimeRule.model_validate(rule)
+        for rule in rules
+        if isinstance(rule, dict) and rule.get("status") == RuleStatus.ACTIVE
+    ]
+    lines = [
+        f"- when {rule.applicability}: {rule.instruction}" for rule in active if rule.instruction
+    ]
+    header = (
+        "## Runtime rules\n\n"
+        "Mined from friction observed in past sessions. Follow these while working:\n"
+    )
+    return clip(header + "\n".join(lines), settings.max_rules_chars)
+
+
+def _messages_with_rules(
+    messages: list[ChatMessage], rules_text: str, max_context_chars: int
+) -> list[ChatMessage]:
+    """Prepend the rules as a system message within the same context budget.
+
+    The rules go in front *after* trimming, so they are never the turns the
+    trimmer drops; the conversation instead gets the remaining budget, keeping
+    the total sent to the served model bounded exactly as before.
+    """
+    budget = max_context_chars - len(rules_text)
+    trimmed = _trim_context(messages, budget)
+    return [ChatMessage(role="system", content=rules_text), *trimmed]
 
 
 def _read_contamination(ctx: StageContext) -> tuple[int, int] | None:
@@ -139,7 +190,8 @@ class EvaluateReplay(Stage):
         cost=CostProfile(compute="mixed", api_usd="high", maintenance="medium"),
         inputs={"eval": "jsonl", "judged": "jsonl", "adapter": "json"},
         # Read only to explain an empty holdout accurately; consumed when present.
-        optional_inputs={"contamination_report": "json"},
+        # rules_verified feeds the GAP-095 rules-in-replay arm when present.
+        optional_inputs={"contamination_report": "json", "rules_verified": "json"},
         outputs={"dashboard": "json", "replay": "jsonl"},
         kill_criterion="Stop the project if the friction drop is within the interval.",
     )
@@ -182,11 +234,14 @@ class EvaluateReplay(Stage):
         settings: EvaluateReplaySettings,
         *,
         seed: int,
+        rules_text: str = "",
     ) -> str:
         messages = _trim_context(
             to_chat_messages(example.context, include_reasoning=False),
             settings.max_context_chars,
         )
+        if rules_text:
+            messages = _messages_with_rules(messages, rules_text, settings.max_context_chars)
         response = await ctx.run.gateway.complete_text(role, config, messages, seed=seed)
         return response.text
 
@@ -221,6 +276,7 @@ class EvaluateReplay(Stage):
         ctx: StageContext,
         settings: EvaluateReplaySettings,
         seeds: Sequence[int],
+        rules_text: str = "",
     ) -> dict[str, dict[str, float]]:
         base_role = self._role(ctx, RoleName.TARGET, settings)
         adapter_role = self._role(ctx, RoleName.ADAPTER, settings)
@@ -230,7 +286,9 @@ class EvaluateReplay(Stage):
                 ("base", RoleName.TARGET, base_role),
                 ("adapter", RoleName.ADAPTER, adapter_role),
             ):
-                continuation = await self._generate(example, role, config, ctx, settings, seed=seed)
+                continuation = await self._generate(
+                    example, role, config, ctx, settings, seed=seed, rules_text=rules_text
+                )
                 verdict = await self._judge(example, continuation, ctx, settings)
                 totals[side]["friction_avoidance"] += verdict.friction_avoidance
                 totals[side]["correctness"] += verdict.correctness
@@ -309,8 +367,18 @@ class EvaluateReplay(Stage):
         }
         cluster_ids = [session_of.get(example.id, example.id) for example in examples]
 
+        # The GAP-095 arm: replay with the mined runtime rules in context, on
+        # both sides, so the measured quantity is the deployed configuration —
+        # (base+rules) vs (adapter+rules) — rather than weights alone.
+        rules_text = ""
+        if settings.inject_rules:
+            rules_text = _load_active_rules(ctx, settings)
+
         results = await asyncio.gather(
-            *(self._replay_one(example, ctx, settings, sampling_seeds) for example in examples)
+            *(
+                self._replay_one(example, ctx, settings, sampling_seeds, rules_text=rules_text)
+                for example in examples
+            )
         )
 
         baseline: dict[str, list[float]] = {name: [] for name, _dir in _SIGNALS}
@@ -333,11 +401,20 @@ class EvaluateReplay(Stage):
             )
             for name, direction in _SIGNALS
         ]
+        rule_count = sum(1 for line in rules_text.splitlines() if line.startswith("- "))
         dashboard = build_dashboard(
             signals,
             episodes=len(examples),
             seeds=list(sampling_seeds),
-            notes=_replay_notes(settings, seeds, sampling_seeds),
+            notes=_replay_notes(settings, seeds, sampling_seeds)
+            + (
+                [
+                    f"rules injected into both sides: {rule_count} active rules, "
+                    f"{len(rules_text)} chars"
+                ]
+                if rules_text
+                else ["rules not injected (weights-only comparison)"]
+            ),
             clusters=len(set(cluster_ids)),
             min_important_delta=mcid,
         )
