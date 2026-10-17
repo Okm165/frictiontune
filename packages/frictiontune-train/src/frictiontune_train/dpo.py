@@ -9,9 +9,11 @@ likelihoods of the two continuations apart under the same prompt, which is
 exactly the thing positive-only SFT structurally cannot express.
 
 The job *continues* from the SFT adapter (the standard SFT-then-DPO ordering).
-The adapter's LoRA configuration is loaded from disk, and with a PEFT model and
-``ref_model=None`` TRL uses the adapter-disabled forward pass as the reference
-policy — the SFT model itself, which is the comparison the pairs encode.
+The adapter's LoRA configuration is loaded from disk. The reference policy is
+a frozen clone of that same SFT adapter — NOT the adapter-disabled base that
+TRL's ``ref_model=None`` shortcut would use: the SFT run trained on the chosen
+side, so measured against the base the preference margin starts pre-saturated
+and the objective looks already solved.
 
 The Unsloth fast path is deliberately not used here: it is a single-card loader
 with its own trainer assumptions, and DPO runs under the same data-parallel
@@ -96,9 +98,22 @@ def run_dpo(request: DpoRequest) -> TrainingResult:
         request.base_model, request.hardware, device_map=_dist.device_map()
     )
     model = peft.PeftModel.from_pretrained(base, request.adapter_dir, is_trainable=True)
-    # TRL uses the adapter-disabled forward pass as the reference when
-    # ref_model is None and the model is PEFT — i.e. the SFT policy itself.
-    ref_model = None
+    # The reference policy is the *SFT model*, not the bare base — the
+    # canonical DPO setup (Rafailov et al. 2023; "pi_ref typically corresponds
+    # to the policy obtained after SFT", arXiv:2506.04272). With ref_model=None
+    # and a PEFT model, TRL uses the adapter-disabled pass — the bare base —
+    # and that would be wrong here twice over: the SFT adapter was trained ON
+    # the chosen side, so the initial margin against the base is already
+    # substantially positive and the gradient near zero (the objective would
+    # look already solved). A frozen clone of the SFT adapter makes the margin
+    # start at exactly zero. The clone costs a second base copy;
+    # precompute_ref_log_probs pays it once instead of per step.
+    ref_base = load_transformers_base(
+        request.base_model, request.hardware, device_map=_dist.device_map()
+    )
+    ref_model = peft.PeftModel.from_pretrained(ref_base, request.adapter_dir)
+    for parameter in ref_model.parameters():
+        parameter.requires_grad_(False)
 
     max_prompt = request.max_prompt_length or (request.max_seq_len * 3) // 4
     max_completion = request.max_completion_length or request.max_seq_len // 4
@@ -113,6 +128,7 @@ def run_dpo(request: DpoRequest) -> TrainingResult:
         max_length=request.max_seq_len,
         max_prompt_length=max_prompt,
         max_completion_length=max_completion,
+        precompute_ref_log_probs=True,
         logging_steps=10,
         save_total_limit=2,
         bf16=request.hardware.dtype == "bf16",

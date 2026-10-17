@@ -133,3 +133,65 @@ def test_prompt_trims_from_the_oldest_end_to_the_budget() -> None:
     # itself is the rejected side, not the prompt
     assert pair.prompt[-1].id == "m19"
     assert pair.rejected[0].id == "friction"
+
+
+def test_examples_outside_the_training_split_never_become_pairs() -> None:
+    # `judged` contains the held-out episodes too; a pair built from one would
+    # train the DPO adapter on the test set's failures. The guard is the split,
+    # and there is no bypass.
+    context = [
+        _user("m1", "run the tests"),
+        _assistant("m2", "all tests pass " + "and verified " * 20),
+    ]
+    completion = [_assistant("m3", "here is the failing output")]
+
+    guarded, reason = _pair_from_example(
+        _example(context, completion),
+        _event(turn=1),
+        PreferencePairsSettings(),
+        train_ids={"some_other_example"},
+    )
+    assert guarded is None
+    assert reason == "not_in_train_split"
+
+    allowed, reason = _pair_from_example(
+        _example(context, completion),
+        _event(turn=1),
+        PreferencePairsSettings(),
+        train_ids={"ex1"},
+    )
+    assert reason == "paired" and allowed is not None
+
+
+def test_low_confidence_events_are_droppable() -> None:
+    context = [
+        _user("m1", "run the tests"),
+        _assistant("m2", "all tests pass " + "and verified " * 20),
+    ]
+    completion = [_assistant("m3", "here is the failing output")]
+    event = _event(turn=1)
+
+    kept, _ = _pair_from_example(
+        _example(context, completion), event, PreferencePairsSettings(), train_ids={"ex1"}
+    )
+    assert kept is not None
+
+    strict, reason = _pair_from_example(
+        _example(context, completion),
+        event,
+        PreferencePairsSettings(min_event_confidence=0.95),
+        train_ids={"ex1"},
+    )
+    assert strict is None
+    assert reason == "low_confidence"
+
+
+def test_preference_pairs_stage_consumes_the_split() -> None:
+    from frictiontune.pipeline.dag import full_graph
+    from frictiontune.stages._extensions import BuildPreferencePairs
+
+    graph = full_graph()
+    # The stage must run AFTER the split exists: before it, the leakage guard
+    # has nothing to guard with.
+    assert graph.predecessors("build_preference_pairs") == ("decontaminate",)
+    assert "train" in BuildPreferencePairs.spec.inputs

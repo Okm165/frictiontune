@@ -41,9 +41,13 @@ EXTENSION_EDGES: Mapping[str, tuple[str, ...]] = {
     "segment": ("reduce", "raft_srft"),
     "friction_detect": ("attribute", "friction_cluster", "raft_srft"),
     "friction_cluster": ("synthesize",),
-    "decontaminate": ("learning_curve",),
+    "decontaminate": ("learning_curve", "build_preference_pairs"),
     "mine": ("synthesize",),
-    "judge": ("build_preference_pairs", "train_grpo"),
+    "judge": ("train_grpo",),
+    # The pairs stage sits AFTER decontaminate on purpose: it filters by the
+    # training split, and the split artifact must exist when it runs. An edge
+    # from `judge` would run it pre-split, where the leakage guard has nothing
+    # to guard with.
     "build_preference_pairs": ("train_dpo",),
     "train_sft": (
         "train_grpo",

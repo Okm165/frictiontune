@@ -1443,12 +1443,21 @@ class PreferencePairsSettings(StageSettings):
     # A rejected side must carry some substance to be a usable negative: an
     # empty or one-line failing turn teaches nothing a style prior does not.
     min_rejected_chars: int = Field(default=200, ge=1)
+    # The pairs inherit the friction analyst's label noise (GAP-101: the
+    # ensemble controls variance, not bias). A floor on the event's own
+    # confidence drops the shakiest judgments before they become training
+    # signal; 0 keeps everything and relies on the golden-set audit instead.
+    min_event_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     max_pair_context_chars: int = Field(default=24_000, ge=1)
     max_pairs: int = Field(default=0, ge=0)  # 0 = all
 
 
 def _pair_from_example(
-    example: TrainingExample, event: FrictionEvent | None, settings: PreferencePairsSettings
+    example: TrainingExample,
+    event: FrictionEvent | None,
+    settings: PreferencePairsSettings,
+    *,
+    train_ids: set[str] | None = None,
 ) -> tuple[PreferencePair | None, str]:
     """Construct one pair from a recovery example, or return ``(None, reason)``.
 
@@ -1456,9 +1465,20 @@ def _pair_from_example(
     messages inside the friction span (tool results, the user's correction)
     stay in the prompt, where they chronologically belong — the model must
     learn to act differently given the same state, not to avoid seeing it.
+
+    ``train_ids`` is the leakage guard: ``judged`` contains *every* kept
+    example, including the held-out episodes the replay measures, so a pair
+    built without the split filter would train the DPO adapter on the test
+    set's failures. When the guard is supplied, only examples on the training
+    side produce pairs; there is no bypass, because a rules-free-looking pair
+    from a test episode is a mislabeled measurement, not a smaller dataset.
     """
+    if train_ids is not None and example.id not in train_ids:
+        return None, "not_in_train_split"
     if event is None:
         return None, "event_not_found"
+    if settings.min_event_confidence and float(event.confidence) < settings.min_event_confidence:
+        return None, "low_confidence"
     if not example.context or not example.completion:
         return None, "empty_side"
     friction_turn = min(span.turn for span in event.evidence)
@@ -1533,7 +1553,7 @@ class BuildPreferencePairs(Stage):
             "the data (Ethayarajh et al. 2024)",
         ],
         cost=CostProfile(compute="cpu", api_usd="none", maintenance="low"),
-        inputs={"judged": "jsonl", "friction_events": "jsonl"},
+        inputs={"judged": "jsonl", "friction_events": "jsonl", "train": "jsonl"},
         outputs={"preference_pairs": "jsonl", "report": "text"},
         kill_criterion=(
             "Drop if the pairs' rejected sides turn out to be duplicates of the "
@@ -1547,6 +1567,10 @@ class BuildPreferencePairs(Stage):
         """Join recovery examples with their friction events and emit pairs."""
         settings = ctx.settings(self.settings_model)
         events = {event.id: event for event in ctx.catalog.stream("friction_events", FrictionEvent)}
+        # The leakage guard: only training-side examples may become pairs.
+        # `judged` holds the held-out episodes too, and a pair built from one
+        # would train the DPO adapter on the test set's failures.
+        train_ids = {record.id for record in ctx.catalog.stream("train", SFTRecord)}
         sink = ctx.jsonl_sink("preference_pairs")
         reasons: dict[str, int] = {}
         pairs = 0
@@ -1560,7 +1584,7 @@ class BuildPreferencePairs(Stage):
             if settings.max_pairs and pairs >= settings.max_pairs:
                 break
             event = events.get(str(example.meta.get("event_id")))
-            pair, reason = _pair_from_example(example, event, settings)
+            pair, reason = _pair_from_example(example, event, settings, train_ids=train_ids)
             reasons[reason] = reasons.get(reason, 0) + 1
             if pair is None:
                 continue
