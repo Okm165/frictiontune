@@ -37,6 +37,26 @@ class SFTRecord(DomainModel):
     meta: JsonObject = Field(default_factory=dict)
 
 
+class PreferencePair(DomainModel):
+    """One chosen/rejected training pair mined from a recovery episode.
+
+    The rejected side is the assistant's *actual failing behaviour* — the turns
+    the friction event's evidence points at, taken verbatim from the corpus —
+    and the chosen side is the recovery the same session actually produced.
+    Both hang off the same prompt: the pre-friction context. This is the
+    negative half that positive-only SFT structurally cannot express (GAP-104),
+    and it needs no rollouts: the pairs exist in artifacts the pipeline already
+    produces.
+    """
+
+    id: str
+    source: str
+    prompt: list[Message]
+    chosen: list[Message]
+    rejected: list[Message]
+    meta: JsonObject = Field(default_factory=dict)
+
+
 class TokenStats(DomainModel):
     """Aggregate tokenization statistics for a built SFT set."""
 

@@ -1,6 +1,10 @@
 # evaluate_replay: replay eval episodes against base and adapter endpoints.
 max_examples: 0
-max_context_chars: 60000
+# 0 = derive the context budget from hardware.max_seq_len (GAP-103): the
+# replay must measure the adapter in distribution, and training packs every
+# record to exactly that many tokens. Set a number to force a different
+# regime — a declared instrument change, not an accident.
+max_context_chars: 0
 max_generation_chars: 20000
 sampling_temperature: 0.0
 max_tokens: 1024

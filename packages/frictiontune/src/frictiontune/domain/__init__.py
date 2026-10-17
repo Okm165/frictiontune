@@ -1,7 +1,13 @@
 """Domain models: strict, typed representations of every pipeline object."""
 
 from frictiontune.domain.base import BaseProbe
-from frictiontune.domain.dataset import SFTRecord, TokenStats, Track, TrainingExample
+from frictiontune.domain.dataset import (
+    PreferencePair,
+    SFTRecord,
+    TokenStats,
+    Track,
+    TrainingExample,
+)
 from frictiontune.domain.episodes import (
     Episode,
     EpisodeFeatures,
@@ -103,6 +109,7 @@ __all__ = [
     "Phase",
     "PhaseDraft",
     "PhaseKind",
+    "PreferencePair",
     "PreferenceProfile",
     "ProbeVerdict",
     "ReasoningPart",

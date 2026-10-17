@@ -25,7 +25,7 @@ from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.errors import ConfigError, LlmError, StageError
 from frictiontune.core.hashing import file_sha256
 from frictiontune.domain.base import BaseProbe
-from frictiontune.domain.dataset import SFTRecord, TrainingExample
+from frictiontune.domain.dataset import PreferencePair, SFTRecord, TrainingExample
 from frictiontune.domain.episodes import Episode, ReducedSpan
 from frictiontune.domain.friction import FrictionEvent
 from frictiontune.domain.ids import example_id
@@ -1432,6 +1432,170 @@ class CapabilityProbe(Stage):
 
 
 # ---------------------------------------------------------------------------
+# preference pairs — the negative half the pipeline already mines
+# ---------------------------------------------------------------------------
+
+
+class PreferencePairsSettings(StageSettings):
+    """Knobs for building chosen/rejected pairs from mined frictions."""
+
+    # A rejected side must carry some substance to be a usable negative: an
+    # empty or one-line failing turn teaches nothing a style prior does not.
+    min_rejected_chars: int = Field(default=200, ge=1)
+    max_pair_context_chars: int = Field(default=24_000, ge=1)
+    max_pairs: int = Field(default=0, ge=0)  # 0 = all
+
+
+def _pair_from_example(
+    example: TrainingExample, event: FrictionEvent | None, settings: PreferencePairsSettings
+) -> tuple[PreferencePair | None, str]:
+    """Construct one pair from a recovery example, or return ``(None, reason)``.
+
+    The rejected side isolates the assistant's failing turns: non-assistant
+    messages inside the friction span (tool results, the user's correction)
+    stay in the prompt, where they chronologically belong — the model must
+    learn to act differently given the same state, not to avoid seeing it.
+    """
+    if event is None:
+        return None, "event_not_found"
+    if not example.context or not example.completion:
+        return None, "empty_side"
+    friction_turn = min(span.turn for span in event.evidence)
+    if friction_turn >= len(example.context):
+        return None, "friction_beyond_context"
+
+    span = example.context[friction_turn:]
+    prompt = [*example.context[:friction_turn], *(m for m in span if m.role != "assistant")]
+    rejected = [m for m in span if m.role == "assistant"]
+
+    def _chars(messages: list[Message]) -> int:
+        return sum(len(message.content_text()) for message in messages)
+
+    if not rejected or _chars(rejected) < settings.min_rejected_chars:
+        return None, "rejected_too_thin"
+    if not any(m.role == "assistant" for m in example.completion):
+        return None, "chosen_without_assistant"
+    # Trim the prompt from the oldest end to the pair budget; the most recent
+    # state is what the chosen/rejected continuation hangs off.
+    over = _chars(prompt) - settings.max_pair_context_chars
+    while over > 0 and len(prompt) > 1:
+        over -= len(prompt[0].content_text())
+        prompt = prompt[1:]
+    if not prompt:
+        return None, "empty_prompt"
+    return (
+        PreferencePair(
+            id=f"{example.id}/pair",
+            source=example.source,
+            prompt=prompt,
+            chosen=list(example.completion),
+            rejected=rejected,
+            meta={
+                "event_id": example.meta.get("event_id"),
+                "leaf": event.leaf,
+                "trigger": example.meta.get("trigger"),
+                "session_id": example.meta.get("session_id"),
+            },
+        ),
+        "paired",
+    )
+
+
+class BuildPreferencePairs(Stage):
+    """Mine chosen/rejected pairs from recovery episodes (GAP-104).
+
+    Positive-only SFT raises the probability of good continuations and can only
+    approximate "avoid what went wrong" by style. The negative half is already
+    in the artifacts: the friction event's evidence points at the assistant's
+    actual failing turns, and the same session's recovery is the chosen side.
+    KTO (Ethayarajh et al. 2024) trains from unpaired binary labels of exactly
+    this shape — desirable/undesirable continuations under the same prompt —
+    and outperforms DPO even at 72% less data when pairs are scarce. This stage
+    emits the pairs; the trainer backend consumes them when one exists.
+    """
+
+    spec = StageSpec(
+        name="build_preference_pairs",
+        tier=Tier.C,
+        requires_llm=False,
+        lead=_EXT,
+        roi="High",
+        justification=(
+            "The negative half of the data already exists as friction evidence; "
+            "a preference objective is the only way to train *avoidance* rather "
+            "than style (GAP-104)."
+        ),
+        evidence=[
+            "v12: 54 recovery candidates judged — each carries a failing turn "
+            "and a recovery under the same context",
+            "KTO outperforms DPO from unpaired binary labels at a fraction of "
+            "the data (Ethayarajh et al. 2024)",
+        ],
+        cost=CostProfile(compute="cpu", api_usd="none", maintenance="low"),
+        inputs={"judged": "jsonl", "friction_events": "jsonl"},
+        outputs={"preference_pairs": "jsonl", "report": "text"},
+        kill_criterion=(
+            "Drop if the pairs' rejected sides turn out to be duplicates of the "
+            "chosen sides' style rather than distinct failures."
+        ),
+        gated_by=_gated("the pairs are inert until a preference-training backend exists"),
+    )
+    settings_model = PreferencePairsSettings
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        """Join recovery examples with their friction events and emit pairs."""
+        settings = ctx.settings(self.settings_model)
+        events = {event.id: event for event in ctx.catalog.stream("friction_events", FrictionEvent)}
+        sink = ctx.jsonl_sink("preference_pairs")
+        reasons: dict[str, int] = {}
+        pairs = 0
+        tracks: dict[str, int] = {}
+        for example in ctx.catalog.stream("judged", TrainingExample):
+            if not example.kept:
+                continue
+            tracks[example.track] = tracks.get(example.track, 0) + 1
+            if example.track != "recovery":
+                continue
+            if settings.max_pairs and pairs >= settings.max_pairs:
+                break
+            event = events.get(str(example.meta.get("event_id")))
+            pair, reason = _pair_from_example(example, event, settings)
+            reasons[reason] = reasons.get(reason, 0) + 1
+            if pair is None:
+                continue
+            sink.write(pair)
+            pairs += 1
+        sink.close()
+
+        lines = [
+            "# Preference pairs\n",
+            f"- pairs: {pairs}",
+            "- judged tracks: "
+            + (", ".join(f"{k}={v}" for k, v in sorted(tracks.items())) or "none"),
+            "- skip reasons: "
+            + (", ".join(f"{k}={v}" for k, v in sorted(reasons.items())) or "none"),
+            "",
+            "- rejected = the assistant's failing turns (friction evidence); chosen =",
+            "  the same session's recovery; both hang off the pre-friction prompt.",
+            "- inert until a preference-training backend (DPO/KTO) consumes them.",
+        ]
+        ctx.emit_text("report", "\n".join(lines) + "\n")
+        return StageResult.from_context(
+            ctx,
+            metrics={
+                "pairs": float(pairs),
+                "judged_recovery": float(
+                    sum(
+                        1
+                        for e in ctx.catalog.stream("judged", TrainingExample)
+                        if e.track == "recovery" and e.kept
+                    )
+                ),
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # registry helper
 # ---------------------------------------------------------------------------
 
@@ -1447,6 +1611,7 @@ EXTENSION_STAGES: tuple[type[Stage], ...] = (
     EvaluateExternal,
     LearningCurve,
     CapabilityProbe,
+    BuildPreferencePairs,
 )
 
 

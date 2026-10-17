@@ -187,3 +187,15 @@ def test_rules_go_in_front_within_the_same_budget() -> None:
     assert total <= 1_500
     # The most recent turns survive; the budget came out of the oldest.
     assert injected[-1].content == "y" * 600
+
+
+def test_context_budget_is_derived_from_the_training_window() -> None:
+    from frictiontune.stages.evaluate_replay import _context_budget
+
+    # Derived: the 8192-token window minus the generation reserve, at the
+    # conservative 3 chars/token for code-heavy text.
+    assert _context_budget(EvaluateReplaySettings(), 8192) == (8192 - 1024 - 256) * 3
+    # An explicit value wins — a declared instrument change.
+    assert _context_budget(EvaluateReplaySettings(max_context_chars=40_000), 8192) == 40_000
+    # The derivation never collapses to zero on a tiny window.
+    assert _context_budget(EvaluateReplaySettings(), 512) >= 1_000

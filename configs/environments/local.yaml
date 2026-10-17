@@ -76,5 +76,8 @@ stages:
   decontaminate:
     max_prompt_chars: 10000
   evaluate_replay:
-    max_context_chars: 40000
+    # 0 = derive from hardware.max_seq_len (GAP-103): the training window
+    # is 8192 tokens, and the old 40000-char trim fed the adapter contexts
+    # ~1.5x deeper than anything it was tuned on.
+    max_context_chars: 0
     max_generation_chars: 16000

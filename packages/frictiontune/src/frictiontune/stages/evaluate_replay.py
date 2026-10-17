@@ -45,7 +45,17 @@ class EvaluateReplaySettings(StageSettings):
     """Knobs for the replay evaluation."""
 
     max_examples: int = 0  # 0 = all
-    max_context_chars: int = 60_000
+    # The replay context budget in characters. 0 (the default in configs) means
+    # *derive*: (max_seq_len - max_tokens - margin) x 3 — a conservative
+    # chars-per-token for code-heavy text. Deriving is not a nicety: training
+    # packs every record to exactly `max_seq_len` tokens, and GAP-103 measured
+    # the replay feeding contexts 1.8-3x deeper than that — out-of-distribution
+    # for the adapter (RoPE attention uncertainty grows beyond the trained
+    # length), with a long prompt able to overflow the served window and
+    # silently drop the system block. An explicitly set value still wins, for
+    # experiments that want a different regime — and is then a declared
+    # instrument change, not an accident.
+    max_context_chars: int = 0
     max_generation_chars: int = 20_000
     sampling_temperature: float = 0.0
     max_tokens: int = 1_024
@@ -120,6 +130,21 @@ def _read_contamination(ctx: StageContext) -> tuple[int, int] | None:
     if isinstance(held_out, int) and isinstance(dropped, int):
         return held_out, dropped
     return None
+
+
+def _context_budget(settings: EvaluateReplaySettings, max_seq_len: int) -> int:
+    """Resolve the replay context budget in characters.
+
+    0 means derive from the training window: the replay must measure the
+    adapter *in distribution*, and training never saw a context deeper than
+    `max_seq_len` tokens (GAP-103). The reserve subtracts the generation and a
+    template margin; 3 chars/token is deliberately conservative for a code-heavy
+    corpus, where tokenizers run worse than the prose-friendly 4.
+    """
+    if settings.max_context_chars > 0:
+        return settings.max_context_chars
+    reserve = settings.max_tokens + 256
+    return max(1_000, (max_seq_len - reserve) * 3)
 
 
 def _format_valid(text: str) -> float:
@@ -234,14 +259,15 @@ class EvaluateReplay(Stage):
         settings: EvaluateReplaySettings,
         *,
         seed: int,
+        budget: int,
         rules_text: str = "",
     ) -> str:
         messages = _trim_context(
             to_chat_messages(example.context, include_reasoning=False),
-            settings.max_context_chars,
+            budget,
         )
         if rules_text:
-            messages = _messages_with_rules(messages, rules_text, settings.max_context_chars)
+            messages = _messages_with_rules(messages, rules_text, budget)
         response = await ctx.run.gateway.complete_text(role, config, messages, seed=seed)
         return response.text
 
@@ -277,6 +303,7 @@ class EvaluateReplay(Stage):
         settings: EvaluateReplaySettings,
         seeds: Sequence[int],
         rules_text: str = "",
+        budget: int = 0,
     ) -> dict[str, dict[str, float]]:
         base_role = self._role(ctx, RoleName.TARGET, settings)
         adapter_role = self._role(ctx, RoleName.ADAPTER, settings)
@@ -287,7 +314,14 @@ class EvaluateReplay(Stage):
                 ("adapter", RoleName.ADAPTER, adapter_role),
             ):
                 continuation = await self._generate(
-                    example, role, config, ctx, settings, seed=seed, rules_text=rules_text
+                    example,
+                    role,
+                    config,
+                    ctx,
+                    settings,
+                    seed=seed,
+                    rules_text=rules_text,
+                    budget=budget,
                 )
                 verdict = await self._judge(example, continuation, ctx, settings)
                 totals[side]["friction_avoidance"] += verdict.friction_avoidance
@@ -373,10 +407,13 @@ class EvaluateReplay(Stage):
         rules_text = ""
         if settings.inject_rules:
             rules_text = _load_active_rules(ctx, settings)
+        budget = _context_budget(settings, ctx.config.hardware.max_seq_len)
 
         results = await asyncio.gather(
             *(
-                self._replay_one(example, ctx, settings, sampling_seeds, rules_text=rules_text)
+                self._replay_one(
+                    example, ctx, settings, sampling_seeds, rules_text=rules_text, budget=budget
+                )
                 for example in examples
             )
         )
