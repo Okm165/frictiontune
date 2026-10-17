@@ -271,7 +271,7 @@ def run_sft(request: TrainingRequest) -> TrainingResult:
                         else outputs.loss[masked].mean().item()
                     )
         familiarity = losses
-        keep, dropped = _familiarity_keep_set(losses, request.known_fraction)
+        keep, _dropped_reasons = _familiarity_keep_set(losses, request.known_fraction)
         records = [record for record in records if str(record.get("id")) in keep]
         model.train()
     familiarity_path = Path(request.output_dir) / "familiarity.json"
