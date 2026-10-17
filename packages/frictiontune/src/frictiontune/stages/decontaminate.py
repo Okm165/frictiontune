@@ -201,6 +201,19 @@ def _t2_containment(eval_norm: str, train_norms: list[str]) -> bool:
     return any(eval_norm in train or train in eval_norm for train in train_norms if train)
 
 
+def _track_counts(records: Sequence[SFTRecord]) -> dict[str, int]:
+    """Count records per track — the observability behind GAP-098.
+
+    The harvest track is model-generated content entering training; the collapse
+    literature (Shumailov et al., Nature 2024) makes its share something that
+    must be visible, not discoverable. Reported for every side of the split.
+    """
+    counts: dict[str, int] = {}
+    for record in records:
+        counts[str(record.track)] = counts.get(str(record.track), 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _contamination_report(
     *,
     total: int,
@@ -370,6 +383,20 @@ class Decontaminate(Stage):
             dropped=len(dropped),
             quantile=eval_cfg.time_split_quantile,
             reasons=reasons,
+        )
+        tracks = {
+            "train": _track_counts(train_records),
+            "val": _track_counts(val_records),
+            "eval": _track_counts(surviving),
+        }
+        report["tracks"] = tracks
+        body += (
+            "\n".join(
+                f"- {side} tracks: "
+                + (", ".join(f"{track}={count}" for track, count in counts.items()) or "none")
+                for side, counts in tracks.items()
+            )
+            + "\n"
         )
         # An empty evaluation set silently disables the only honest measure of
         # whether tuning helped; downstream `evaluate_replay` will refuse to run.

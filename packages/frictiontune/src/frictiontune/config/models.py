@@ -154,6 +154,15 @@ class EvaluationConfig(BaseConfigModel):
     """Contamination and evaluation policy."""
 
     time_split_quantile: float = Field(default=0.8, gt=0.0, lt=1.0)
+    # The pre-registered minimal important difference (GAP-102): the smallest
+    # rubric delta the pipeline will treat as a real effect. Declaring it here
+    # — rather than after seeing a result — is what makes a powered
+    # measurement conclusive; the dashboard flags deltas below it as "measured,
+    # below the declared bar". 0.5 is half a rubric point: with the judge's
+    # measured compression onto {4,5} (GAP-099), smaller deltas are within the
+    # instrument's own wobble. Changing this re-keys the evaluation stages,
+    # which is correct: it is a change of instrument, not of tuning.
+    min_important_delta: float = Field(default=0.5, ge=0.0)
     t1_exact_ngram: bool = True
     t2_syntactic: bool = True
     t3_semantic: bool = True

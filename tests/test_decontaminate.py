@@ -201,3 +201,16 @@ def test_val_split_never_takes_the_last_session() -> None:
 
 def test_val_split_of_an_empty_pool_is_empty() -> None:
     assert _val_split([], {}, 0.2) == ([], [])
+
+
+def test_track_counts_make_the_synthetic_share_visible() -> None:
+    from frictiontune.stages.decontaminate import _track_counts
+
+    records = [
+        _record("a", session="s1"),
+        _record("b", session="s1"),
+        SFTRecord(id="c", source="c", track="success"),
+        SFTRecord(id="d", source="d", track="synthetic"),
+    ]
+    assert _track_counts(records) == {"recovery": 2, "success": 1, "synthetic": 1}
+    assert _track_counts([]) == {}

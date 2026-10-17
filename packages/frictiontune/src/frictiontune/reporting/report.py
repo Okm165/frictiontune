@@ -98,6 +98,14 @@ def render_friction_report(profile: FrictionProfile) -> str:
     return "\n".join(lines)
 
 
+def _histogram(scores: Sequence[float]) -> str:
+    """One line per score distribution: ``5x6 4x2 3x1`` (counts by score)."""
+    counts: dict[int, int] = {}
+    for score in scores:
+        counts[int(score)] = counts.get(int(score), 0) + 1
+    return " ".join(f"{score}x{counts[score]}" for score in sorted(counts, reverse=True))
+
+
 def render_dashboard(dashboard: ReplayDashboard) -> str:
     """Render the replay dashboard as a markdown report."""
     lines: list[str] = [
@@ -130,6 +138,17 @@ def render_dashboard(dashboard: ReplayDashboard) -> str:
             rows,
         )
     )
+    # The judge's raw score distribution (GAP-099): means hide compression, and
+    # the measured failure is exactly compression — a judge that never leaves
+    # {4,5} cannot express an improvement above "very good".
+    histograms = [
+        f"- {signal.name}: base {_histogram(signal.base_scores)} | "
+        f"tuned {_histogram(signal.tuned_scores)}"
+        for signal in dashboard.signals
+        if signal.base_scores
+    ]
+    if histograms:
+        lines += ["", "### Score distributions", "", *histograms]
     if dashboard.notes:
         lines.append("")
         lines.append("## Notes")

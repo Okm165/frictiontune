@@ -45,6 +45,21 @@ class Signal(BaseModel):
     sign_test_p: float = 1.0
     min_attainable_p: float = 1.0
     powered: bool = False
+    # The raw paired observations. n is small by construction; storing them
+    # makes the judge's use of its scale visible (GAP-099: compression onto
+    # {4,5} was invisible in means alone).
+    base_scores: list[float] = Field(default_factory=list)
+    tuned_scores: list[float] = Field(default_factory=list)
+    # Episodes within one session are not independent (same task, tools and
+    # context), so when cluster ids are supplied the primary power floor and
+    # sign test are computed over cluster means, not raw episodes (GAP-097).
+    clusters: int = 0
+    cluster_sign_test_p: float | None = None
+    cluster_min_attainable_p: float | None = None
+    # The pre-registered minimal important difference (GAP-102): None when no
+    # bar was declared; otherwise whether the measured delta reaches it. A
+    # significant result below the bar is still "measured, below the bar".
+    meets_mcid: bool | None = None
 
 
 class ReplayDashboard(BaseModel):
@@ -60,9 +75,15 @@ class ReplayDashboard(BaseModel):
     friction_drop_ci_high: float = 0.0
     # Instrument-level power floor over all replayed episodes: below six
     # episodes no two-sided 0.05 claim is attainable and every `significant`
-    # flag is held False, whatever the deltas look like.
+    # flag is held False, whatever the deltas look like. When clusters are
+    # supplied the floor is computed over clusters (GAP-097), which is lower
+    # than the episode count on any clustered corpus.
     min_attainable_p: float = 1.0
     powered: bool = False
+    clusters: int = 0
+    # The declared minimal important difference, for the record; per-signal
+    # verdicts live on the signals.
+    min_important_delta: float | None = None
     # None when no lucky-pass measurement was produced (the core replay cannot
     # compute it; only the gated user-simulation extension can). It is omitted
     # rather than fabricated as 0.0, which would read as a real measurement.
@@ -84,10 +105,21 @@ class ReplayDashboard(BaseModel):
             f"[{self.friction_drop_ci_low * 100:.1f}, {self.friction_drop_ci_high * 100:.1f}] "
             f"over {self.episodes} episodes"
         )
+        if self.clusters and self.clusters < self.episodes:
+            text += f" ({self.clusters} independent sessions)"
         if not self.powered:
             text += (
                 f" — underpowered: n={self.episodes} cannot reach p<=0.05 "
                 f"(floor {self.min_attainable_p:.3f}); no effect claim is possible"
+            )
+        primary = self.signal(PRIMARY_SIGNAL)
+        if (
+            self.min_important_delta is not None
+            and primary is not None
+            and primary.meets_mcid is False
+        ):
+            text += (
+                f" — below the declared bar ({self.min_important_delta:g}); measured, not claimable"
             )
         return text
 
@@ -103,29 +135,57 @@ def make_signal(
     *,
     direction: Direction,
     seed: int = 0,
+    cluster_ids: Sequence[str] | None = None,
+    min_important_delta: float | None = None,
 ) -> Signal:
-    """Build a comparable signal from paired baseline/tuned observations."""
+    """Build a comparable signal from paired baseline/tuned observations.
+
+    ``cluster_ids`` labels the independent unit each observation belongs to
+    (the session, for replayed episodes). When supplied, the *primary* power
+    floor and sign test are computed over per-cluster mean deltas: episodes of
+    one session share task, tools and context, so treating them as independent
+    overstates the instrument's power (GAP-097).
+    """
     if len(baseline_values) != len(tuned_values):
         raise ValueError(f"signal {name!r}: paired sequences differ in length")
+    if cluster_ids is not None and len(cluster_ids) != len(baseline_values):
+        raise ValueError(f"signal {name!r}: cluster ids differ in length from the pairs")
     deltas = [t - b for b, t in zip(baseline_values, tuned_values, strict=True)]
     ci_low, ci_high = bootstrap_ci(deltas, seed=seed)
     delta = mean(deltas)
+    floor = min_attainable_p(len(deltas))
+    powered = floor <= 0.05
+
+    cluster_sign_p: float | None = None
+    cluster_floor: float | None = None
+    n_clusters = 0
+    if cluster_ids is not None and len(set(cluster_ids)) < len(deltas):
+        grouped: dict[str, list[float]] = {}
+        for cluster, cluster_delta in zip(cluster_ids, deltas, strict=True):
+            grouped.setdefault(cluster, []).append(cluster_delta)
+        cluster_deltas = [mean(group) for group in grouped.values()]
+        n_clusters = len(cluster_deltas)
+        cluster_floor = min_attainable_p(n_clusters)
+        cluster_sign_p = sign_test_p(cluster_deltas)
+        # The clustered design is the honest one; power follows it when it is
+        # the stricter of the two views.
+        if cluster_floor > floor:
+            powered = cluster_floor <= 0.05
+
     # Power first, significance second. The bootstrap interval is descriptive —
     # at n=4 it has only 35 distinct resamples and can exclude zero by luck — so
     # `significant` additionally requires the instrument to be *capable* of a
-    # 0.05-level claim (n >= 6 for the sign-test floor). Holding `significant`
-    # False below that floor is the point: it stops a lucky interval from
-    # reading as a detection.
-    floor = min_attainable_p(len(deltas))
-    powered = floor <= 0.05
-    # A movement is only significant when the bootstrap interval for the paired
-    # deltas excludes zero; `improved` alone just reads the sign of the mean. A
-    # single pair has a degenerate interval [d, d] and cannot support a claim of
-    # significance, so at least two pairs are required.
+    # 0.05-level claim. Holding `significant` False below that floor is the
+    # point: it stops a lucky interval from reading as a detection.
     significant = (
         powered
         and len(deltas) >= 2
         and ((ci_low > 0.0 and ci_high > 0.0) or (ci_low < 0.0 and ci_high < 0.0))
+    )
+    meets_mcid = (
+        None
+        if min_important_delta is None
+        else abs(delta) >= min_important_delta and _improved(delta, direction)
     )
     return Signal(
         name=name,
@@ -141,6 +201,12 @@ def make_signal(
         sign_test_p=sign_test_p(deltas),
         min_attainable_p=floor,
         powered=powered,
+        base_scores=[float(value) for value in baseline_values],
+        tuned_scores=[float(value) for value in tuned_values],
+        clusters=n_clusters,
+        cluster_sign_test_p=cluster_sign_p,
+        cluster_min_attainable_p=cluster_floor,
+        meets_mcid=meets_mcid,
     )
 
 
@@ -158,12 +224,17 @@ def build_dashboard(
     seeds: Sequence[int],
     lucky_pass_rate: float | None = None,
     notes: Sequence[str] = (),
+    clusters: int = 0,
+    min_important_delta: float | None = None,
 ) -> ReplayDashboard:
     """Assemble a dashboard and derive the headline friction drop.
 
     The headline uses the primary signal's relative reduction and scales its
     bootstrap interval by the same ratio, which keeps the interval interpretable
-    even though it is derived rather than bootstrapped directly.
+    even though it is derived rather than bootstrapped directly. ``clusters``
+    is the number of independent units behind the observations; when it is
+    lower than ``episodes`` the instrument-level power floor follows it
+    (GAP-097).
     """
     primary = next((item for item in signals if item.name == PRIMARY_SIGNAL), None)
     friction_drop = 0.0
@@ -179,7 +250,7 @@ def build_dashboard(
             friction_drop = (primary.tuned - primary.baseline) / primary.baseline
             ci_low = primary.ci_low * scale
             ci_high = primary.ci_high * scale
-    floor = min_attainable_p(episodes)
+    floor = min_attainable_p(clusters if clusters else episodes)
     return ReplayDashboard(
         signals=list(signals),
         episodes=episodes,
@@ -189,6 +260,8 @@ def build_dashboard(
         friction_drop_ci_high=ci_high,
         min_attainable_p=floor,
         powered=floor <= 0.05,
+        clusters=clusters,
+        min_important_delta=min_important_delta,
         lucky_pass_rate=lucky_pass_rate,
         notes=list(notes),
     )

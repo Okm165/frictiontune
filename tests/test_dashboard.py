@@ -128,3 +128,76 @@ def test_dashboard_reports_instrument_power_and_headline_caveat() -> None:
     assert dashboard.min_attainable_p == pytest.approx(0.125)
     assert "underpowered" in dashboard.headline()
     assert "no effect claim is possible" in dashboard.headline()
+
+
+def test_clustered_sign_test_uses_sessions_as_the_independent_unit() -> None:
+    # Six observations but only three sessions: the clustered floor is 0.25, so
+    # the signal must refuse a claim even though the record-level floor (0.03)
+    # would allow one.
+    baseline = [3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+    tuned = [5.0, 5.0, 5.0, 5.0, 5.0, 5.0]
+    clustered = make_signal(
+        "x",
+        baseline,
+        tuned,
+        direction="higher_better",
+        cluster_ids=["s1", "s1", "s2", "s2", "s3", "s3"],
+    )
+    assert clustered.clusters == 3
+    assert clustered.cluster_min_attainable_p == pytest.approx(0.25)
+    assert clustered.cluster_sign_test_p == pytest.approx(0.25)
+    assert not clustered.powered
+    assert not clustered.significant
+    # Uncorrelated view of the same data: n=6 records, floor 0.03.
+    flat = make_signal("x", baseline, tuned, direction="higher_better")
+    assert flat.powered and flat.significant
+
+
+def test_cluster_ids_must_pair_with_observations() -> None:
+    with pytest.raises(ValueError):
+        make_signal("x", [1, 2, 3], [2, 3, 4], direction="higher_better", cluster_ids=["s1", "s2"])
+
+
+def test_min_important_delta_flags_below_bar_and_passes_at_bar() -> None:
+    below = make_signal(
+        "x",
+        [3, 3, 3, 3, 3, 3],
+        [3.25, 3.25, 3.25, 3.25, 3.25, 3.25],
+        direction="higher_better",
+        min_important_delta=0.5,
+    )
+    assert below.meets_mcid is False
+
+    at = make_signal(
+        "x",
+        [3, 3, 3, 3, 3, 3],
+        [3.5, 3.5, 3.5, 3.5, 3.5, 3.5],
+        direction="higher_better",
+        min_important_delta=0.5,
+    )
+    assert at.meets_mcid is True
+
+    # Without a declared bar the flag is None: absence of a declaration must not
+    # read as a verdict.
+    undeclared = make_signal("x", [3, 3], [4, 4], direction="higher_better")
+    assert undeclared.meets_mcid is None
+
+
+def test_dashboard_stores_raw_scores_for_compression_audit() -> None:
+    signal = make_signal(
+        PRIMARY_SIGNAL,
+        [5, 5, 4],
+        [5, 4, 4],
+        direction="higher_better",
+        cluster_ids=["s1", "s2", "s3"],
+        min_important_delta=0.5,
+    )
+    assert signal.base_scores == [5.0, 5.0, 4.0]
+    dashboard = build_dashboard(
+        [signal], episodes=3, seeds=[0], clusters=3, min_important_delta=0.5
+    )
+    assert dashboard.clusters == 3
+    assert dashboard.min_important_delta == 0.5
+    # Three clusters: floor 0.25 -> underpowered, whatever the records say.
+    assert not dashboard.powered
+    assert "below the declared bar" in dashboard.headline()

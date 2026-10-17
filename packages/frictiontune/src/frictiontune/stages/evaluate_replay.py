@@ -300,6 +300,15 @@ class EvaluateReplay(Stage):
         if not examples:
             return self._skip_empty_holdout(ctx, sampling_seeds)
 
+        # Episodes within one session are not independent observations, so the
+        # sign test's primary view aggregates to session means (GAP-097). The
+        # eval records carry the session id; the judged examples match by id.
+        session_of = {
+            record.id: str(record.meta.get("session_id") or record.id)
+            for record in ctx.catalog.stream("eval", SFTRecord)
+        }
+        cluster_ids = [session_of.get(example.id, example.id) for example in examples]
+
         results = await asyncio.gather(
             *(self._replay_one(example, ctx, settings, sampling_seeds) for example in examples)
         )
@@ -311,9 +320,16 @@ class EvaluateReplay(Stage):
                 baseline[name].append(entry["base"][name])
                 tuned[name].append(entry["adapter"][name])
 
+        mcid = ctx.config.evaluation.min_important_delta
         signals = [
             make_signal(
-                name, baseline[name], tuned[name], direction=direction, seed=ctx.config.seed
+                name,
+                baseline[name],
+                tuned[name],
+                direction=direction,
+                seed=ctx.config.seed,
+                cluster_ids=cluster_ids,
+                min_important_delta=mcid,
             )
             for name, direction in _SIGNALS
         ]
@@ -322,6 +338,8 @@ class EvaluateReplay(Stage):
             episodes=len(examples),
             seeds=list(sampling_seeds),
             notes=_replay_notes(settings, seeds, sampling_seeds),
+            clusters=len(set(cluster_ids)),
+            min_important_delta=mcid,
         )
         ctx.emit_json("dashboard", dashboard)
         ctx.emit_jsonl(
