@@ -64,9 +64,17 @@ def test_dashboard_without_primary_signal_is_zero() -> None:
 
 
 def test_signal_is_significant_when_the_interval_excludes_zero() -> None:
-    signal = make_signal("user_corrections", [3, 4, 5], [1, 2, 3], direction="lower_better")
+    # Six pairs so the instrument is powered: below n>=6 `significant` is held
+    # False by design, however clean the interval looks.
+    signal = make_signal(
+        "user_corrections",
+        [3, 4, 5, 3, 4, 5],
+        [1, 2, 3, 1, 2, 3],
+        direction="lower_better",
+    )
 
     assert signal.improved
+    assert signal.powered
     assert signal.significant
 
 
@@ -83,3 +91,40 @@ def test_signal_from_a_single_pair_is_never_significant() -> None:
 
     assert signal.improved
     assert not signal.significant
+
+
+def test_sign_test_p_and_power_floor_are_reported_per_signal() -> None:
+    # n=4: even all-agreeing deltas leave the sign-test floor at 0.125, so the
+    # signal must refuse `significant` however clean the bootstrap interval is.
+    signal = make_signal("x", [3, 3, 3, 3], [5, 5, 5, 5], direction="higher_better")
+    assert signal.sign_test_p == pytest.approx(0.125)
+    assert signal.min_attainable_p == pytest.approx(0.125)
+    assert not signal.powered
+    assert not signal.significant
+
+    # n=6: the floor crosses 0.05 and a unanimous improvement becomes claimable.
+    powered = make_signal("x", [3, 3, 3, 3, 3, 3], [5, 5, 5, 5, 5, 5], direction="higher_better")
+    assert powered.min_attainable_p == pytest.approx(2**-5)
+    assert powered.powered
+    assert powered.significant
+
+
+def test_sign_test_p_discards_ties() -> None:
+    # One moving pair among four: p is the two-sided probability of 1 success
+    # in 1 trial, not of 1 in 4 — ties carry no sign information.
+    signal = make_signal("x", [3, 3, 3, 3], [3, 3, 3, 5], direction="higher_better")
+    assert signal.sign_test_p == pytest.approx(1.0)
+
+
+def test_dashboard_reports_instrument_power_and_headline_caveat() -> None:
+    primary = make_signal(
+        PRIMARY_SIGNAL,
+        [3, 3, 3, 3],
+        [4, 4, 4, 4],
+        direction="higher_better",
+    )
+    dashboard = build_dashboard([primary], episodes=4, seeds=[0])
+    assert not dashboard.powered
+    assert dashboard.min_attainable_p == pytest.approx(0.125)
+    assert "underpowered" in dashboard.headline()
+    assert "no effect claim is possible" in dashboard.headline()

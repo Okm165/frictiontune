@@ -22,7 +22,14 @@ embedding:
 evaluation:
   # Leading edge of the time split: everything strictly older trains, the rest
   # evaluates. Never mix the two.
-  time_split_quantile: 0.8
+  #
+  # 0.8 held out only the newest session, which the contamination tiers then
+  # trimmed to 4-7 episodes — below the six that a paired sign test needs
+  # before any 0.05-level claim is attainable (the p floor is 2·(1/2)^n). 0.6
+  # holds out ~40% of the records so the floor is reachable; the cost is fewer
+  # training records, which is the right trade while the instrument cannot
+  # detect anything. At n>=6 the honest next move is to revisit this.
+  time_split_quantile: 0.6
   t1_exact_ngram: true
   t2_syntactic: true
   t3_semantic: true

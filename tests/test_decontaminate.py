@@ -8,7 +8,11 @@ Records are grouped by source session, so a session never straddles the split.
 from __future__ import annotations
 
 from frictiontune.domain.dataset import SFTRecord
-from frictiontune.stages.decontaminate import _contamination_report, _time_split
+from frictiontune.stages.decontaminate import (
+    _contamination_report,
+    _time_split,
+    _val_split,
+)
 
 
 def _record(identifier: str, source: str | None = None, session: str | None = None) -> SFTRecord:
@@ -88,6 +92,7 @@ def test_a_session_is_never_split_across_the_boundary() -> None:
 def test_report_flags_an_empty_eval_set_when_training_records_exist() -> None:
     report, body = _contamination_report(
         total=5,
+        val=0,
         generated_train=0,
         train=5,
         surviving=0,
@@ -104,6 +109,7 @@ def test_report_flags_an_empty_eval_set_when_training_records_exist() -> None:
 def test_report_does_not_flag_a_populated_eval_set() -> None:
     report, body = _contamination_report(
         total=5,
+        val=0,
         generated_train=0,
         train=4,
         surviving=1,
@@ -123,6 +129,7 @@ def test_report_does_not_flag_an_all_generated_pool() -> None:
         total=2,
         generated_train=2,
         train=2,
+        val=0,
         surviving=0,
         dropped=0,
         quantile=0.8,
@@ -160,3 +167,37 @@ def test_a_single_session_pool_still_holds_something_out() -> None:
 
     assert len(evaluation) == 5
     assert train == []
+
+
+def test_val_split_carves_newest_sessions_and_keeps_train_whole() -> None:
+    # Five sessions of two records each. 20% of 10 records = 2, so the newest
+    # session goes to val and the rest stay in train.
+    records = [
+        _record(f"s{session}_{part}", session=f"s{session}")
+        for session in range(5)
+        for part in range(2)
+    ]
+    meta = {record.id: ("text", int(record.id[1])) for record in records}
+
+    train, val = _val_split(records, meta, 0.2)
+
+    assert {record.id for record in val} == {"s4_0", "s4_1"}
+    assert {record.id for record in train} == {
+        f"s{session}_{part}" for session in range(4) for part in range(2)
+    }
+
+
+def test_val_split_never_takes_the_last_session() -> None:
+    # One session holding everything: a val carve would starve training, so the
+    # val set must come out empty rather than strip train to nothing.
+    records = [_record(f"a{i}", session="ses_a") for i in range(6)]
+    meta = {record.id: ("text", i) for i, record in enumerate(records)}
+
+    train, val = _val_split(records, meta, 0.2)
+
+    assert val == []
+    assert len(train) == 6
+
+
+def test_val_split_of_an_empty_pool_is_empty() -> None:
+    assert _val_split([], {}, 0.2) == ([], [])

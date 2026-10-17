@@ -38,6 +38,39 @@ def percentile(values: Sequence[float], quantile: float) -> float:
     return ordered[lower] * (1 - fraction) + ordered[upper] * fraction
 
 
+def sign_test_p(values: Sequence[float]) -> float:
+    """Exact two-sided sign-test p for paired deltas (zeros discarded).
+
+    The assumption-free paired test: under a null of no effect each non-zero
+    delta is equally likely positive or negative, so ``p = 2 · P(X >= max(k,
+    m-k))`` for ``X ~ Binomial(m, 0.5)``. It is weaker than the bootstrap when
+    magnitudes carry information, and the only paired test whose floor is
+    computable in advance — which is what makes it the right check that an
+    experiment has enough episodes to claim anything at all.
+    """
+    signs = [1 if value > 0 else -1 for value in values if value != 0]
+    m = len(signs)
+    if m == 0:
+        return 1.0
+    k = sum(1 for sign in signs if sign > 0)
+    tail = max(k, m - k)
+    upper = sum(math.comb(m, i) for i in range(tail, m + 1))
+    return min(1.0, 2.0 * float(upper) / float(2**m))
+
+
+def min_attainable_p(n: int) -> float:
+    """Smallest two-sided sign-test p reachable with ``n`` paired episodes.
+
+    All ``n`` deltas agreeing in sign is the most extreme outcome, worth
+    ``2 · (1/2)^n``. This is the power floor of the instrument: at n=4 the floor
+    is 0.125, so no 0.05-level claim is attainable *no matter how large the
+    effect*; six episodes are the minimum for a two-sided 0.05 claim.
+    """
+    if n <= 0:
+        return 1.0
+    return min(1.0, 2.0 ** (1 - n))
+
+
 def bootstrap_ci(
     values: Sequence[float],
     *,

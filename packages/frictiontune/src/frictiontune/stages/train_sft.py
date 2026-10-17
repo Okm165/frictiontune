@@ -77,7 +77,7 @@ class TrainSft(Stage):
         justification="The core deliverable: a model that needs less steering.",
         evidence=["QLoRA; target_parameters=[] for MoE; loss on completion only"],
         cost=CostProfile(compute="gpu", api_usd="none", human="none", maintenance="high"),
-        inputs={"train": "jsonl", "eval": "jsonl", "base_probe": "json"},
+        inputs={"train": "jsonl", "val": "jsonl", "base_probe": "json"},
         outputs={"training_result": "json", "adapter": "json"},
         kill_criterion=(
             "Drop the full run if the friction drop is within noise (see evaluate_replay)."
@@ -97,8 +97,13 @@ class TrainSft(Stage):
 
         train_entry = ctx.catalog.get("train")
         dataset_dir = str(Path(train_entry.path).parent)
-        eval_entry = ctx.catalog.get("eval")
-        eval_dir = str(Path(eval_entry.path).parent)
+        # Model selection (early stopping, best checkpoint) runs on the
+        # *validation* set carved by decontaminate from the train side — never
+        # on the held-out evaluation records, which are the test set the replay
+        # measures. Selecting on the test set biases the measured improvement
+        # upward (Cawley & Talbot 2010).
+        val_entry = ctx.catalog.get("val")
+        val_dir = str(Path(val_entry.path).parent)
         output_dir = str(ctx.store.directory / settings.output_name)
         epochs = _epochs_for(train_entry.ref.rows, ctx.config.hardware, settings)
 
@@ -119,7 +124,7 @@ class TrainSft(Stage):
             resume_from=settings.resume_from,
             max_steps=settings.max_steps,
             save_steps=settings.save_steps,
-            eval_dir=eval_dir,
+            eval_dir=val_dir,
         )
 
         backend = ctx.run.backends.training()

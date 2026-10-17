@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from frictiontune.core.stats import bootstrap_ci, mean
+from frictiontune.core.stats import bootstrap_ci, mean, min_attainable_p, sign_test_p
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -37,6 +37,14 @@ class Signal(BaseModel):
     n: int
     improved: bool
     significant: bool = False
+    # The exact sign-test p for the paired deltas, and the smallest p the
+    # instrument could have produced with this many episodes. Together they
+    # separate "the deltas align" from "this experiment could have detected
+    # that": at n=4 the floor is 0.125, so `significant` is forced False even
+    # when every delta agrees — the honest answer, not a pessimistic one.
+    sign_test_p: float = 1.0
+    min_attainable_p: float = 1.0
+    powered: bool = False
 
 
 class ReplayDashboard(BaseModel):
@@ -50,6 +58,11 @@ class ReplayDashboard(BaseModel):
     friction_drop: float = 0.0
     friction_drop_ci_low: float = 0.0
     friction_drop_ci_high: float = 0.0
+    # Instrument-level power floor over all replayed episodes: below six
+    # episodes no two-sided 0.05 claim is attainable and every `significant`
+    # flag is held False, whatever the deltas look like.
+    min_attainable_p: float = 1.0
+    powered: bool = False
     # None when no lucky-pass measurement was produced (the core replay cannot
     # compute it; only the gated user-simulation extension can). It is omitted
     # rather than fabricated as 0.0, which would read as a real measurement.
@@ -66,11 +79,17 @@ class ReplayDashboard(BaseModel):
     def headline(self) -> str:
         """A one-line human summary of the friction drop."""
         pct = self.friction_drop * 100.0
-        return (
+        text = (
             f"friction drop {pct:.1f}% "
             f"[{self.friction_drop_ci_low * 100:.1f}, {self.friction_drop_ci_high * 100:.1f}] "
             f"over {self.episodes} episodes"
         )
+        if not self.powered:
+            text += (
+                f" — underpowered: n={self.episodes} cannot reach p<=0.05 "
+                f"(floor {self.min_attainable_p:.3f}); no effect claim is possible"
+            )
+        return text
 
 
 def _improved(delta: float, direction: Direction) -> bool:
@@ -91,12 +110,22 @@ def make_signal(
     deltas = [t - b for b, t in zip(baseline_values, tuned_values, strict=True)]
     ci_low, ci_high = bootstrap_ci(deltas, seed=seed)
     delta = mean(deltas)
+    # Power first, significance second. The bootstrap interval is descriptive —
+    # at n=4 it has only 35 distinct resamples and can exclude zero by luck — so
+    # `significant` additionally requires the instrument to be *capable* of a
+    # 0.05-level claim (n >= 6 for the sign-test floor). Holding `significant`
+    # False below that floor is the point: it stops a lucky interval from
+    # reading as a detection.
+    floor = min_attainable_p(len(deltas))
+    powered = floor <= 0.05
     # A movement is only significant when the bootstrap interval for the paired
     # deltas excludes zero; `improved` alone just reads the sign of the mean. A
     # single pair has a degenerate interval [d, d] and cannot support a claim of
     # significance, so at least two pairs are required.
-    significant = len(deltas) >= 2 and (
-        (ci_low > 0.0 and ci_high > 0.0) or (ci_low < 0.0 and ci_high < 0.0)
+    significant = (
+        powered
+        and len(deltas) >= 2
+        and ((ci_low > 0.0 and ci_high > 0.0) or (ci_low < 0.0 and ci_high < 0.0))
     )
     return Signal(
         name=name,
@@ -109,6 +138,9 @@ def make_signal(
         n=len(deltas),
         improved=_improved(delta, direction),
         significant=significant,
+        sign_test_p=sign_test_p(deltas),
+        min_attainable_p=floor,
+        powered=powered,
     )
 
 
@@ -147,6 +179,7 @@ def build_dashboard(
             friction_drop = (primary.tuned - primary.baseline) / primary.baseline
             ci_low = primary.ci_low * scale
             ci_high = primary.ci_high * scale
+    floor = min_attainable_p(episodes)
     return ReplayDashboard(
         signals=list(signals),
         episodes=episodes,
@@ -154,6 +187,8 @@ def build_dashboard(
         friction_drop=friction_drop,
         friction_drop_ci_low=ci_low,
         friction_drop_ci_high=ci_high,
+        min_attainable_p=floor,
+        powered=floor <= 0.05,
         lucky_pass_rate=lucky_pass_rate,
         notes=list(notes),
     )

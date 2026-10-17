@@ -9,6 +9,7 @@ are judged by an agent over embedding-retrieved candidates.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from pydantic import Field
@@ -42,6 +43,14 @@ class DecontaminateSettings(StageSettings):
     # to trade recall for fewer judge calls. It never decides the drop itself.
     retrieval_floor: float = 0.0
     embed_batch: int = Field(default=64, ge=1)
+    # Fraction of the *train-side* records carved into a validation set for
+    # model selection (early stopping, best checkpoint). Selecting the adapter
+    # on the held-out evaluation records is selection bias in performance
+    # evaluation (Cawley & Talbot 2010): the shipped adapter would be the one
+    # that fits the test episodes best, biasing the measured improvement upward
+    # by construction. The val set is taken newest-first from the train side, so
+    # it stays strictly older than the evaluation set.
+    val_fraction: float = Field(default=0.2, gt=0.0, lt=1.0)
     max_text_chars: int = 20_000
     max_train_ngrams: int = 2_000_000
     # Bound on the contamination judge's prompt. `retrieve_k` texts of
@@ -140,6 +149,52 @@ def _time_split(
     return [*generated_records, *train_real], eval_real
 
 
+def _val_split(
+    records: Sequence[SFTRecord],
+    meta: Mapping[str, tuple[str, int]],
+    val_fraction: float,
+) -> tuple[list[SFTRecord], list[SFTRecord]]:
+    """Carve a validation set out of the train side, newest sessions first.
+
+    Early stopping and best-checkpoint selection need a loss signal that is not
+    the held-out evaluation: selecting the adapter on the episodes the final
+    measurement replays is selection bias in performance evaluation (Cawley &
+    Talbot 2010) — the shipped adapter would be the one that fits the test
+    episodes best, inflating the measured improvement by construction. The val
+    set is therefore taken from the **newest train-side sessions backwards**
+    until it holds about ``val_fraction`` of the train records: strictly older
+    than the evaluation set (the time order is preserved), but closest to it in
+    distribution, which is what makes it a good selection proxy. Sessions fall
+    on one side whole, exactly as in ``_time_split``, and at least one session
+    always remains in train — a val set that starves training would trade one
+    validity failure for another.
+    """
+    groups: dict[str, list[SFTRecord]] = {}
+    for record in records:
+        session = record.meta.get("session_id") or record.id
+        groups.setdefault(str(session), []).append(record)
+
+    ordered = sorted(
+        groups.values(),
+        key=lambda group: max((meta.get(record.id, ("", 0))[1] for record in group), default=0),
+        reverse=True,
+    )
+    quota = math.ceil(len(records) * val_fraction)
+    val_sessions: list[list[SFTRecord]] = []
+    val_count = 0
+    for group in ordered:
+        if val_count >= quota:
+            break
+        if val_count + len(group) >= len(records):
+            break  # never take the last session: train must keep something
+        val_sessions.append(group)
+        val_count += len(group)
+    val_ids = {record.id for group in val_sessions for record in group}
+    val = [record for record in records if record.id in val_ids]
+    train = [record for record in records if record.id not in val_ids]
+    return train, val
+
+
 def _t2_containment(eval_norm: str, train_norms: list[str]) -> bool:
     if not eval_norm:
         return False
@@ -151,6 +206,7 @@ def _contamination_report(
     total: int,
     generated_train: int,
     train: int,
+    val: int,
     surviving: int,
     dropped: int,
     quantile: float,
@@ -167,6 +223,7 @@ def _contamination_report(
         "total": total,
         "generated_train": generated_train,
         "train": train,
+        "val": val,
         "eval": surviving,
         "eval_empty": eval_empty,
         "dropped_contaminated": dropped,
@@ -177,7 +234,8 @@ def _contamination_report(
         "# Decontaminate\n\n"
         f"- total: {total}\n"
         f"- train (past): {train}\n"
-        f"- eval (future): {surviving}\n"
+        f"- val (model selection, carved from train): {val}\n"
+        f"- eval (future, untouched by training): {surviving}\n"
         f"- dropped as contaminated: {dropped}\n"
     )
     if eval_empty:
@@ -201,7 +259,7 @@ class Decontaminate(Stage):
         evidence=["time split + T1-T4 tiers over embedding-retrieved candidates"],
         cost=CostProfile(compute="mixed", api_usd="medium", maintenance="medium"),
         inputs={"curated": "jsonl", "judged": "jsonl"},
-        outputs={"train": "jsonl", "eval": "jsonl", "contamination_report": "json"},
+        outputs={"train": "jsonl", "val": "jsonl", "eval": "jsonl", "contamination_report": "json"},
         kill_criterion="Relax tiers only when the eval set is demonstrably clean another way.",
     )
     settings_model = DecontaminateSettings
@@ -243,6 +301,10 @@ class Decontaminate(Stage):
         train_records, eval_records = _time_split(
             records, meta, generated, eval_cfg.time_split_quantile
         )
+        # Model selection must not see the evaluation set (Cawley & Talbot
+        # 2010): carve a validation set out of the train side, newest sessions
+        # first, and hand it to the trainer as its early-stopping signal.
+        train_records, val_records = _val_split(train_records, meta, settings.val_fraction)
 
         train_texts = [meta.get(record.id, ("", 0))[0] for record in train_records]
         train_norms = [normalize_for_match(text) for text in train_texts]
@@ -290,6 +352,10 @@ class Decontaminate(Stage):
         for record in train_records:
             train_sink.write(record)
         train_sink.close()
+        val_sink = ctx.jsonl_sink("val")
+        for record in val_records:
+            val_sink.write(record)
+        val_sink.close()
         eval_sink = ctx.jsonl_sink("eval")
         for record in surviving:
             eval_sink.write(record)
@@ -299,6 +365,7 @@ class Decontaminate(Stage):
             total=len(records),
             generated_train=sum(1 for record in train_records if record.id in generated),
             train=len(train_records),
+            val=len(val_records),
             surviving=len(surviving),
             dropped=len(dropped),
             quantile=eval_cfg.time_split_quantile,
@@ -320,6 +387,7 @@ class Decontaminate(Stage):
             metrics={
                 "total": float(len(records)),
                 "train": float(len(train_records)),
+                "val": float(len(val_records)),
                 "eval": float(len(surviving)),
                 "dropped_contaminated": float(len(dropped)),
             },

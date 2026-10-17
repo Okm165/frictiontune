@@ -88,13 +88,19 @@ def _early_stopping(has_eval: bool, patience: int = 3) -> list[Any]:
 def _load_eval(request: TrainingRequest, datasets: Any) -> Any | None:
     """Load the held-out split, or return ``None`` when there is none.
 
-    The eval file is written by ``decontaminate`` next to ``train.jsonl``. A run
-    without one, or with an empty one, simply trains without evaluation instead
-    of failing: the evaluation boundary is a data decision, not a trainer one.
+    The validation file is written by ``decontaminate`` next to ``train.jsonl``
+    (``val.jsonl``; ``eval.jsonl`` is accepted for artifacts produced before the
+    three-way split). A run without one, or with an empty one, simply trains
+    without evaluation instead of failing: the selection boundary is a data
+    decision, not a trainer one. This set is used for early stopping and
+    best-checkpoint selection only — never to report final performance.
     """
     if not request.eval_dir:
         return None
-    path = Path(request.eval_dir) / "eval.jsonl"
+    directory = Path(request.eval_dir)
+    path = directory / "val.jsonl"
+    if not path.is_file():
+        path = directory / "eval.jsonl"
     if not path.is_file():
         return None
     records = _read_records(path)
