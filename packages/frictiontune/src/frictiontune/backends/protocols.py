@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from frictiontune.backends.models import (
+        DpoRequest,
         ExportRequest,
         ExportResult,
         GrpoRequest,
@@ -42,6 +43,10 @@ class TrainingBackend(Protocol):
 
     async def train_grpo(self, request: GrpoRequest) -> TrainingResult:
         """Execute one GRPO job and return its artifacts."""
+        ...
+
+    async def train_dpo(self, request: DpoRequest) -> TrainingResult:
+        """Execute one DPO preference job and return its artifacts."""
         ...
 
 

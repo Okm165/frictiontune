@@ -6,7 +6,7 @@ see :mod:`frictiontune_train.training`), then reads the result JSON back. Under
 data parallelism every rank runs this module, but only rank 0 writes the result
 so the ranks cannot race on one file.
 
-Usage: ``python -m frictiontune_train.runner <sft|grpo> <request.json> <result.json>``
+Usage: ``python -m frictiontune_train.runner <sft|dpo|grpo> <request.json> <result.json>``
 """
 
 from __future__ import annotations
@@ -34,13 +34,16 @@ def main(argv: list[str]) -> int:
 
 def _run(kind: str, path: Path) -> TrainingResult:
     """Load the request for ``kind`` and dispatch to its trainer."""
-    from frictiontune.backends.models import GrpoRequest, TrainingRequest
+    from frictiontune.backends.models import DpoRequest, GrpoRequest, TrainingRequest
 
+    from frictiontune_train.dpo import run_dpo
     from frictiontune_train.grpo import run_grpo
     from frictiontune_train.sft import run_sft
 
     if kind == "sft":
         return run_sft(TrainingRequest.model_validate_json(path.read_text()))
+    if kind == "dpo":
+        return run_dpo(DpoRequest.model_validate_json(path.read_text()))
     return run_grpo(GrpoRequest.model_validate_json(path.read_text()))
 
 

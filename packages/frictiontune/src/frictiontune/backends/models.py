@@ -67,6 +67,34 @@ class TrainingRequest(BackendModel):
     eval_dir: str | None = None
 
 
+class DpoRequest(BackendModel):
+    """Everything needed to run one preference-optimization job (GAP-104).
+
+    The job *continues* from the SFT adapter: the pairs teach avoidance on top
+    of the behaviour the SFT stage taught, which is the standard SFT-then-DPO
+    ordering. The adapter's LoRA configuration is loaded from the adapter
+    itself, so the request carries no rank/alpha — those are the SFT run's
+    decisions, not the preference run's.
+    """
+
+    base_model: str
+    adapter_dir: str
+    pairs_dir: str
+    output_dir: str
+    hardware: HardwareConfig
+    seed: int = 0
+    max_seq_len: int = 8192
+    # DPO's learning rates run one to two orders below SFT's: the objective
+    # pushes likelihoods apart rather than fitting text.
+    learning_rate: float = 1e-5
+    beta: float = 0.1
+    epochs: float = 1.0
+    max_steps: int = -1
+    # 0 = derive from max_seq_len (prompt 3/4, completion 1/4).
+    max_prompt_length: int = 0
+    max_completion_length: int = 0
+
+
 class TrainingResult(BackendModel):
     """Outcome of a fine-tuning job."""
 

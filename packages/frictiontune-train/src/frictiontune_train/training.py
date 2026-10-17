@@ -34,11 +34,11 @@ from frictiontune.core.errors import StageError
 from frictiontune.core.logging import get_logger
 
 if TYPE_CHECKING:
-    from frictiontune.backends.models import GrpoRequest, TrainingRequest
+    from frictiontune.backends.models import DpoRequest, GrpoRequest, TrainingRequest
 
 _log = get_logger("frictiontune_train.training")
 
-_STAGE = {"sft": "train_sft", "grpo": "train_grpo"}
+_STAGE = {"sft": "train_sft", "dpo": "train_dpo", "grpo": "train_grpo"}
 _LOCAL_INCLUDE = Path(".cache/frictiontune/python-include/usr/include")
 
 
@@ -52,6 +52,10 @@ class LocalTrainingBackend:
     async def train_grpo(self, request: GrpoRequest) -> TrainingResult:
         """Run a GRPO job in a child process."""
         return await asyncio.to_thread(_run_in_child, request, "grpo")
+
+    async def train_dpo(self, request: DpoRequest) -> TrainingResult:
+        """Run a DPO preference job in a child process (GAP-104)."""
+        return await asyncio.to_thread(_run_in_child, request, "dpo")
 
 
 def _run_in_child(request: Any, kind: str) -> TrainingResult:

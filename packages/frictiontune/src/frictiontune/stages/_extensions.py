@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from pydantic import Field
 
 from frictiontune.backends.models import (
+    DpoRequest,
     GrpoRequest,
     RolloutRequest,
     RolloutResult,
@@ -1596,6 +1597,123 @@ class BuildPreferencePairs(Stage):
 
 
 # ---------------------------------------------------------------------------
+# preference training — consume the pairs (GAP-104, backend half)
+# ---------------------------------------------------------------------------
+
+
+class TrainDpoSettings(StageSettings):
+    """Knobs for the DPO run. The LoRA shape comes from the SFT adapter."""
+
+    learning_rate: float = 1e-5
+    beta: float = 0.1
+    epochs: float = 1.0
+    max_steps: int = -1
+
+
+class TrainDpo(Stage):
+    """Continue the SFT adapter into an avoidance policy with DPO (GAP-104).
+
+    The pairs stage mines chosen/rejected continuations under the same
+    pre-friction prompt; this stage hands them to the trainer and continues the
+    SFT adapter's LoRA weights under the preference objective. SFT first, DPO
+    second — the ordering every reference implementation uses — and the result
+    is a *separate* adapter: the replay can serve either, which is what makes
+    SFT-vs-DPO an A/B rather than a replacement.
+    """
+
+    spec = StageSpec(
+        name="train_dpo",
+        tier=Tier.C,
+        requires_llm=False,
+        lead=_EXT,
+        roi="High",
+        justification=(
+            "The preference objective is the only training signal that encodes "
+            "'do not do this' — positive-only SFT approximates avoidance by style."
+        ),
+        evidence=[
+            "build_preference_pairs emits mined pairs from existing artifacts",
+            "DPO on agent trajectories: TGPO 2025 reports DPO 34.0 vs SFT 31.8 "
+            "success on web-agent tasks",
+        ],
+        cost=CostProfile(compute="gpu", api_usd="none", maintenance="medium"),
+        inputs={"preference_pairs": "jsonl", "adapter": "json", "base_probe": "json"},
+        outputs={"dpo_training_result": "json", "dpo_adapter": "json", "report": "text"},
+        kill_criterion=(
+            "Drop if the DPO adapter's replay shows the style collapse the SFT "
+            "run showed (verbosity collapse without rubric gains)."
+        ),
+        gated_by=_gated("needs a preference-pairs artifact and free GPUs"),
+    )
+    settings_model = TrainDpoSettings
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        """Validate inputs and delegate to the training backend."""
+        settings = ctx.settings(self.settings_model)
+        probe = BaseProbe.model_validate(ctx.catalog.read_json("base_probe"))
+        if not probe.trainable:
+            raise StageError(
+                "train_dpo",
+                f"base model {probe.repo_id!r} is not trainable ({'; '.join(probe.notes)})",
+            )
+        adapter = ctx.catalog.read_json("adapter")
+        sft_dir = str(adapter.get("adapter_dir", "")) if isinstance(adapter, dict) else ""
+        if not sft_dir:
+            raise StageError("train_dpo", "the SFT adapter artifact names no adapter_dir")
+        pairs_entry = ctx.catalog.get("preference_pairs")
+        pairs_dir = str(Path(pairs_entry.path).parent)
+        output_dir = str(ctx.store.directory / "dpo_adapter")
+
+        request = DpoRequest(
+            base_model=probe.path or probe.repo_id,
+            adapter_dir=sft_dir,
+            pairs_dir=pairs_dir,
+            output_dir=output_dir,
+            hardware=ctx.config.hardware,
+            seed=ctx.config.seed,
+            max_seq_len=ctx.config.hardware.max_seq_len,
+            learning_rate=settings.learning_rate,
+            beta=settings.beta,
+            epochs=settings.epochs,
+            max_steps=settings.max_steps,
+        )
+        backend = ctx.run.backends.training()
+        result: TrainingResult = await backend.train_dpo(request)
+        ctx.emit_json("dpo_training_result", result)
+        ctx.emit_json(
+            "dpo_adapter",
+            {
+                "base_model": request.base_model,
+                "sft_adapter_dir": sft_dir,
+                "adapter_dir": result.adapter_dir,
+                "steps": result.steps,
+                "train_loss": result.train_loss,
+            },
+        )
+        ctx.emit_text(
+            "report",
+            "# Train DPO\n\n"
+            f"- base: `{request.base_model}`\n"
+            f"- continues SFT adapter: `{sft_dir}`\n"
+            f"- pairs: {pairs_entry.ref.rows}\n"
+            f"- steps: {result.steps}\n"
+            f"- train loss: {result.train_loss:.4f}\n"
+            f"- beta: {settings.beta:g}, lr: {settings.learning_rate:g}\n"
+            f"- adapter: `{result.adapter_dir}`\n\n"
+            "- serve this adapter dir in the replay's ADAPTER role to A/B it\n"
+            "  against the SFT adapter on the same held-out episodes.\n",
+        )
+        return StageResult.from_context(
+            ctx,
+            metrics={
+                "steps": float(result.steps),
+                "train_loss": result.train_loss,
+                "pairs": float(pairs_entry.ref.rows),
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # registry helper
 # ---------------------------------------------------------------------------
 
@@ -1612,6 +1730,7 @@ EXTENSION_STAGES: tuple[type[Stage], ...] = (
     LearningCurve,
     CapabilityProbe,
     BuildPreferencePairs,
+    TrainDpo,
 )
 
 
