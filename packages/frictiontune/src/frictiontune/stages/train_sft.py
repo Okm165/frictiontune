@@ -39,6 +39,13 @@ class TrainSftSettings(StageSettings):
     # minimum is *reachable*; it is a ceiling, not a target, because the trainer
     # stops early once the held-out loss stops improving and ships the best
     # checkpoint rather than the last. `max_epochs` bounds the ceiling.
+    # The Gekhman arm (GAP-096): drop the (1 - known_fraction) records whose
+    # loss at base init is highest — the facts the model does not already know.
+    # See TrainingRequest.known_fraction for why this is an A/B knob and never
+    # a default: Dataset Cartography's ambiguous examples drive OOD
+    # generalization, and hard-to-learn regions often mark labeling errors —
+    # the golden-set audit (GAP-100) reads the familiarity table either way.
+    known_fraction: float = Field(default=1.0, gt=0.0, le=1.0)
     min_steps: int = Field(default=60, ge=0)
     max_epochs: float = Field(default=40.0, ge=1.0)
     lora_r: int = 16
@@ -122,6 +129,7 @@ class TrainSft(Stage):
             target_modules=settings.target_modules or probe.target_modules,
             target_parameters=probe.target_parameters,
             resume_from=settings.resume_from,
+            known_fraction=settings.known_fraction,
             max_steps=settings.max_steps,
             save_steps=settings.save_steps,
             eval_dir=val_dir,

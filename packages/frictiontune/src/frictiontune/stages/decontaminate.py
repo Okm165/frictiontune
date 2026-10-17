@@ -214,6 +214,19 @@ def _track_counts(records: Sequence[SFTRecord]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def eval_without_friction(tracks: Mapping[str, dict[str, int]], surviving: bool) -> bool:
+    """Whether the held-out side measures only clean-context behaviour.
+
+    The replay's friction_avoidance axis means something different on clean
+    work than on friction-bearing episodes, and on a single-user corpus the
+    contamination tiers systematically strip the recovery episodes from the
+    held-out side (the round-5 finding). A non-empty eval side with no
+    recovery-track records is that regime — say so in the artifact instead of
+    letting the reader assume the instrument measures avoidance.
+    """
+    return surviving and tracks.get("eval", {}).get("recovery", 0) == 0
+
+
 def _contamination_report(
     *,
     total: int,
@@ -398,6 +411,14 @@ class Decontaminate(Stage):
             )
             + "\n"
         )
+        if eval_without_friction(tracks, bool(surviving)):
+            report["eval_without_friction"] = True
+            body += (
+                "\n- **WARNING: the held-out set contains no recovery-track "
+                "episodes — the replay measures clean-context behaviour only, "
+                "and the friction-bearing skill the recovery track teaches is "
+                "never evaluated.**\n"
+            )
         # An empty evaluation set silently disables the only honest measure of
         # whether tuning helped; downstream `evaluate_replay` will refuse to run.
         # Surface it here, where the cause (a drop) is still visible.

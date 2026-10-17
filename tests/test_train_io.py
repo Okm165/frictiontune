@@ -179,3 +179,25 @@ def test_a_zero_step_budget_is_a_no_op() -> None:
     settings = TrainSftSettings(min_steps=0)
 
     assert _epochs_for(23, _hardware(), settings) == 3.0
+
+
+def test_familiarity_keep_set_drops_the_highest_init_loss() -> None:
+    from frictiontune_train.sft import _familiarity_keep_set
+
+    losses = {"a": 0.5, "b": 2.5, "c": 1.0, "d": 3.0}
+    keep, dropped = _familiarity_keep_set(losses, 0.5)
+    # The two highest-loss records (the "unknown" facts) are dropped.
+    assert keep == {"a", "c"}
+    assert set(dropped) == {"b", "d"}
+    assert all(reason == "unknown_at_init" for reason in dropped.values())
+
+
+def test_familiarity_keep_set_keeps_everything_at_full_fraction() -> None:
+    from frictiontune_train.sft import _familiarity_keep_set
+
+    losses = {"a": 0.5, "b": 2.5}
+    keep, dropped = _familiarity_keep_set(losses, 1.0)
+    assert keep == {"a", "b"}
+    assert dropped == {}
+    # And on an empty table there is nothing to do.
+    assert _familiarity_keep_set({}, 0.5) == (set(), {})

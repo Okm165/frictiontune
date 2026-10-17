@@ -210,6 +210,26 @@ def load_model_and_tokenizer(
     return model, tokenizer
 
 
+def _familiarity_keep_set(
+    losses: dict[str, float], known_fraction: float
+) -> tuple[set[str], dict[str, str]]:
+    """Pick the records to keep under the Gekhman arm (GAP-096).
+
+    ``losses`` maps record id to mean label-loss at base init. Keeping the
+    *lowest-loss* fraction keeps the examples the model already knows how to
+    produce — the ones that teach efficient use of existing knowledge instead
+    of new facts. Returns the keep set and the drop reason per dropped id, so
+    the stage's report can show exactly who was excluded and why.
+    """
+    if known_fraction >= 1.0 or not losses:
+        return set(losses), {}
+    keep_count = max(1, round(len(losses) * known_fraction))
+    ranked = sorted(losses.items(), key=lambda item: (item[1], item[0]))
+    dropped = ranked[keep_count:]
+    keep = {identifier for identifier, _loss in ranked[:keep_count]}
+    return keep, {identifier: "unknown_at_init" for identifier, _loss in dropped}
+
+
 def run_sft(request: TrainingRequest) -> TrainingResult:
     """Execute one supervised QLoRA job and return its artifacts."""
     torch = require("torch", hint=torch_hint())
@@ -227,9 +247,49 @@ def run_sft(request: TrainingRequest) -> TrainingResult:
         # Bind this process to its row of the device group before any allocation.
         torch.cuda.set_device(distributed.local_rank())
     model, tokenizer = load_model_and_tokenizer(request, device_map=distributed.device_map())
+    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id or 0
+
+    # The Gekhman arm: when a fraction below 1.0 is requested, measure each
+    # record's mean label-loss at base init (one forward pass, no gradient) and
+    # drop the highest-loss records — the facts the model does not already
+    # know. The familiarity table lands next to the adapter as evidence, and
+    # the drop is mirrored in the result so the stage's report can show it.
+    familiarity: dict[str, float] = {}
+    if request.known_fraction < 1.0:
+        model.eval()
+        losses: dict[str, float] = {}
+        with torch.no_grad():
+            for index, record in enumerate(records):
+                row = _collator(pad_token_id, request.max_seq_len)([record])
+                outputs = model(**row)
+                labels = row["labels"]
+                masked = labels != -100
+                if masked.any():
+                    losses[str(record.get("id", index))] = float(
+                        outputs.loss.item()
+                        if outputs.loss.dim() == 0
+                        else outputs.loss[masked].mean().item()
+                    )
+        familiarity = losses
+        keep, dropped = _familiarity_keep_set(losses, request.known_fraction)
+        records = [record for record in records if str(record.get("id")) in keep]
+        model.train()
+    familiarity_path = Path(request.output_dir) / "familiarity.json"
+    if familiarity:
+        familiarity_path.parent.mkdir(parents=True, exist_ok=True)
+        familiarity_path.write_text(
+            json.dumps(
+                {
+                    "known_fraction": request.known_fraction,
+                    "losses": familiarity,
+                },
+                indent=1,
+            ),
+            encoding="utf-8",
+        )
+
     train_dataset = datasets.Dataset.from_list(records)
     eval_dataset = _load_eval(request, datasets)
-    pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id or 0
 
     settings: dict[str, Any] = {
         "output_dir": request.output_dir,

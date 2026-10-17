@@ -65,6 +65,16 @@ class TrainingRequest(BackendModel):
     max_steps: int = -1
     save_steps: int = 100
     eval_dir: str | None = None
+    # The Gekhman arm (GAP-096): 1.0 keeps every record; below 1.0, the
+    # (1 - known_fraction) records with the HIGHEST loss at base init are
+    # dropped before training. Loss at init is the model's own answer to "did
+    # it already know this?" — Gekhman et al. (EMNLP 2024) showed Unknown
+    # examples fit slowly and learning them linearly increases hallucination.
+    # The counterweight is Dataset Cartography (Swayamdipta et al., EMNLP
+    # 2020): high-loss examples include the *ambiguous* ones that drive OOD
+    # generalization, and hard-to-learn regions often mark labeling errors —
+    # which is why this is a measured A/B knob, never a default.
+    known_fraction: float = 1.0
 
 
 class DpoRequest(BackendModel):

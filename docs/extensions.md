@@ -141,6 +141,77 @@ outputs, guarding against overfitting to the one mined corpus.
 *Gate:* internal replay is the primary evaluation.
 *Kill:* drop if the internal replay and sim-user signals already generalise.
 
+## `learning_curve` — the data-volume instrument (GAP-093)
+
+**In:** `train`, `val`, `base_probe` → **Out:** `learning_curve` (JSON), `report`.
+No LLM; four training runs. `scripts/ops/ft_pod.sh curve`.
+
+Trains on growing seeded subsets (25/50/75/100% by default, `repeats` per
+fraction) with **train_sft's hyperparameters** — only data volume varies — and
+tabulates the best val loss per size. A curve still falling at the largest n
+means data volume binds; a flat one means the corpus (of this quality mix) is
+not the lever. The report describes the curve and never extrapolates a power
+law (Mahmood et al. 2022); the v12 reading is in `journal/JOURNAL.md`.
+
+*Gate:* one full training run per point.
+*Kill:* drop if the full-size point stops reproducing train_sft's val loss.
+
+## `capability_probe` — the forgetting check (GAP-094)
+
+**In:** `adapter` (+ base and adapter servers up) → **Out:** `probe_dashboard`,
+`probe`, `report`. Requires LLM.
+
+Replays six fixed, corpus-independent coding prompts through base and adapter
+and judges both sides (`capability_judge`/`ProbeVerdict`: correctness + clarity
+only — no friction_avoidance ceremony on prompts that have no friction
+context). The replay dashboard measures the target behaviour; this probe
+measures whether tuning *damaged* ordinary capability — the regression the
+target metric cannot see. Run it with the replay phase's servers up:
+
+```bash
+scripts/ops/ft_pod.sh serve
+uv run frictiontune run --stage capability_probe --cached-deps --allow-gated
+```
+
+*Gate:* needs both servers; the replay phase's env is sufficient.
+*Kill:* drop if the probe's base scores stop reproducing across runs.
+
+## `build_preference_pairs` — the negative half (GAP-104)
+
+**In:** `judged`, `friction_events`, `train` → **Out:** `preference_pairs`
+(JSONL), `report`. No LLM.
+
+Joins recovery-track examples with their friction events. **Rejected** = the
+assistant's verbatim failing turns (the friction event's evidence index);
+**chosen** = the same session's recovery; both under the pre-friction prompt —
+non-assistant span messages (tool results, user corrections) stay in the
+prompt, because the model must learn to act differently given the same state,
+not to avoid seeing it. Every example is filtered against decontaminate's
+**train split**, fail-closed: a pair from a held-out episode trains the adapter
+on the test set's failures. `min_event_confidence` drops the shakiest analyst
+judgments (GAP-101's label noise) before they become training signal.
+
+*Gate:* the pairs are inert until a preference-training backend consumes them.
+*Kill:* drop if the rejected sides turn out to be style duplicates of the
+chosen sides rather than distinct failures.
+
+## `train_dpo` — preference training (GAP-104, backend half)
+
+**In:** `preference_pairs`, `adapter`, `base_probe` → **Out:** `dpo_adapter`,
+`dpo_training_result`, `report`. GPUs; no LLM.
+
+Continues the SFT adapter under the DPO objective (TRL). The reference policy
+is a **frozen clone of the SFT adapter** — deliberately not the
+adapter-disabled base that TRL's `ref_model=None` shortcut would use: the SFT
+run trained on the chosen side of these pairs, so measured against the base the
+margin starts pre-saturated and the objective looks already solved. Emits a
+*separate* `dpo_adapter` so the replay can A/B SFT-vs-DPO by pointing its
+ADAPTER role at either.
+
+*Gate:* needs a preference-pairs artifact and free GPUs.
+*Kill:* drop if the DPO adapter's replay shows the style collapse the SFT run
+showed (verbosity collapse without rubric gains).
+
 ---
 
 ## Why gate at all?

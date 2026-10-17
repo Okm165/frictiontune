@@ -214,3 +214,18 @@ def test_track_counts_make_the_synthetic_share_visible() -> None:
     ]
     assert _track_counts(records) == {"recovery": 2, "success": 1, "synthetic": 1}
     assert _track_counts([]) == {}
+
+
+def test_eval_without_friction_warns_only_on_a_populated_clean_side() -> None:
+    from frictiontune.stages.decontaminate import eval_without_friction
+
+    # The measured regime: the contamination tiers strip every recovery
+    # episode, so the held-out side is success-only — the replay then measures
+    # clean-context behaviour, and the artifact must say so.
+    success_only = {"eval": {"success": 5}}
+    assert eval_without_friction(success_only, surviving=True)
+    # With recovery episodes present, the instrument measures the real thing.
+    mixed = {"eval": {"success": 4, "recovery": 1}}
+    assert not eval_without_friction(mixed, surviving=True)
+    # An empty eval side has its own warning; the composition one does not fire.
+    assert not eval_without_friction(success_only, surviving=False)
