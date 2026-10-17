@@ -28,6 +28,7 @@ from frictiontune.domain import (
     HarvestedWork,
     InferredToolSchema,
     JudgeVerdict,
+    ProbeVerdict,
     RecoverySpan,
     RedactionReview,
     ReduceSummary,
@@ -71,6 +72,11 @@ _SAMPLES: dict[type[BaseModel], dict[str, object]] = {
         "accept": True,
     },
     DedupVerdict: {"reason": "same lesson", "duplicate": True, "similarity": 1, "keep": "a"},
+    ProbeVerdict: {
+        "reason": "does what the task asks; wording is plain",
+        "correctness": 3,
+        "clarity": 3,
+    },
     ReplayVerdict: {
         "reason": "competent default, nothing notable either way",
         "friction_avoidance": 3,

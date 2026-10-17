@@ -44,7 +44,13 @@ EXTENSION_EDGES: Mapping[str, tuple[str, ...]] = {
     "decontaminate": ("learning_curve",),
     "mine": ("synthesize",),
     "judge": ("train_grpo",),
-    "train_sft": ("train_grpo", "rollout", "evaluate_sim_user", "evaluate_external"),
+    "train_sft": (
+        "train_grpo",
+        "rollout",
+        "evaluate_sim_user",
+        "evaluate_external",
+        "capability_probe",
+    ),
 }
 
 # Soft ordering edges: producer → consumer. They sequence the two stages when

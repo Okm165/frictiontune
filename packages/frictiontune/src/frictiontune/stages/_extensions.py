@@ -22,7 +22,7 @@ from frictiontune.backends.models import (
     TrainingResult,
 )
 from frictiontune.config.models import LlmRoleConfig, RoleName
-from frictiontune.core.errors import ConfigError, StageError
+from frictiontune.core.errors import ConfigError, LlmError, StageError
 from frictiontune.core.hashing import file_sha256
 from frictiontune.domain.base import BaseProbe
 from frictiontune.domain.dataset import SFTRecord, TrainingExample
@@ -37,6 +37,7 @@ from frictiontune.domain.profiles import (
 )
 from frictiontune.domain.responses import (
     FrictionClusters,
+    ProbeVerdict,
     ReduceSummary,
     SimulatedUserTurn,
     SyntheticBatch,
@@ -45,9 +46,15 @@ from frictiontune.domain.trace import Message, TextPart
 from frictiontune.llm.messages import ChatMessage
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
-from frictiontune.reporting.dashboard import build_dashboard, make_signal, relative_drop
+from frictiontune.reporting.dashboard import (
+    Direction,
+    build_dashboard,
+    make_signal,
+    relative_drop,
+)
 from frictiontune.reporting.report import render_dashboard
 from frictiontune.stages.common import clip, read_events_by_episode, render_transcript
+from frictiontune.stages.evaluate_replay import _format_valid
 from frictiontune.stages.train_sft import TrainSftSettings, _epochs_for
 
 if TYPE_CHECKING:
@@ -1186,6 +1193,245 @@ def _fmt_loss(loss: object) -> str:
 
 
 # ---------------------------------------------------------------------------
+# capability probe — the forgetting instrument
+# ---------------------------------------------------------------------------
+
+_PROBE_PROMPT = "capability_judge"
+
+# The probe's tasks are fixed general coding questions, deliberately NOT drawn
+# from the corpus: they are the instrument, the same way export's parity probes
+# are. They span code, explanation, tooling, and data shaping so a style-only
+# adapter (one that learned "be terse") cannot pass them all by accident.
+_PROBE_PROMPTS: tuple[str, ...] = (
+    "Write a Python function `chunked(iterable, size)` that yields lists of at "
+    "most `size` items from any iterable, including one-shot generators. Include "
+    "a short example of use.",
+    "Explain the difference between a process and a thread, and when you would "
+    "choose one over the other. Keep it under 150 words.",
+    "Write a bash one-liner that lists the 10 largest files under the current "
+    "directory with their human-readable sizes, largest first.",
+    "Write a Python function that flattens a nested dict into dot-separated "
+    'keys, e.g. {"a": {"b": 1}} becomes {"a.b": 1}. Handle lists by index.',
+    "What does `git rebase --onto A B C` do? Answer in under 100 words.",
+    "Given tables users(id, name) and orders(id, user_id, created_at), write a "
+    "SQL query returning each user's name, their order count, and the date of "
+    "their most recent order.",
+)
+
+
+class CapabilityProbeSettings(StageSettings):
+    """Knobs for the forgetting probe."""
+
+    max_tokens: int = 1_024
+    max_generation_chars: int = 20_000
+    max_instruction_chars: int = 4_000
+
+
+class CapabilityProbe(Stage):
+    """Replay general coding prompts on base vs adapter: the forgetting check.
+
+    The replay dashboard measures the target behaviour, which is also the only
+    thing it can measure — a tuned model that got *worse at ordinary coding*
+    while learning friction avoidance would be invisible to it (GAP-094). This
+    stage replays a fixed set of corpus-independent prompts through both the
+    base model and the served adapter from the same instruction, scores every
+    completion with the shared judge, and reports the paired deltas with the
+    same power floor as the replay: below six probes no 0.05-level claim is
+    attainable, and the dashboard says so.
+    """
+
+    spec = StageSpec(
+        name="capability_probe",
+        tier=Tier.C,
+        requires_llm=True,
+        prompts=[_PROBE_PROMPT],
+        roles=[RoleName.TARGET, RoleName.ADAPTER, RoleName.JUDGE],
+        lead=_EXT,
+        roi="Medium",
+        justification=(
+            "A regression check the replay cannot provide: only the target "
+            "metric is measured today, so general degradation is invisible."
+        ),
+        evidence=[
+            "v11r: one replay answer collapsed to 155 chars — style damage from "
+            "tiny-data SFT is real and can reach ordinary answers",
+            "Biderman et al. (TMLR 2024): forgetting arises from "
+            "over-optimization; LoRA + modest lr mostly prevent it — 'mostly' "
+            "is not a measurement",
+        ],
+        cost=CostProfile(compute="mixed", api_usd="low", maintenance="low"),
+        inputs={"adapter": "json"},
+        outputs={"probe_dashboard": "json", "probe": "jsonl", "report": "text"},
+        kill_criterion=(
+            "Drop if the probe's base scores stop reproducing across runs "
+            "(the instrument itself has become noise)."
+        ),
+        gated_by=_gated(
+            "needs the base and adapter servers up; run inside the replay phase "
+            "or after `ft_pod.sh serve`"
+        ),
+    )
+    settings_model = CapabilityProbeSettings
+
+    _SIGNALS: tuple[tuple[str, Direction], ...] = (
+        ("correctness", "higher_better"),
+        ("clarity", "higher_better"),
+        ("verbosity_chars", "lower_better"),
+        ("format_valid", "higher_better"),
+    )
+
+    def _gen_role(
+        self, ctx: StageContext, role: RoleName, settings: CapabilityProbeSettings
+    ) -> LlmRoleConfig:
+        try:
+            base = ctx.config.role(role)
+        except ConfigError as exc:
+            raise StageError(
+                "capability_probe",
+                f"role {role.value!r} is not configured; serve the adapter and "
+                "add the role (the replay phase's env is sufficient)",
+            ) from exc
+        return base.model_copy(
+            update={"temperature": 0.0, "max_tokens": settings.max_tokens, "cache": False}
+        )
+
+    async def _generate(
+        self,
+        instruction: str,
+        role: RoleName,
+        config: LlmRoleConfig,
+        ctx: StageContext,
+        settings: CapabilityProbeSettings,
+    ) -> str:
+        messages = [ChatMessage(role="user", content=instruction)]
+        response = await ctx.run.gateway.complete_text(role, config, messages, seed=ctx.config.seed)
+        return response.text
+
+    async def _judge(
+        self,
+        instruction: str,
+        continuation: str,
+        ctx: StageContext,
+        settings: CapabilityProbeSettings,
+    ) -> ProbeVerdict:
+        try:
+            role = ctx.config.role(RoleName.JUDGE)
+        except ConfigError as exc:
+            raise StageError("capability_probe", "the judge role is not configured") from exc
+        # Greedy judging, as in the replay: a sampled judge would add noise to
+        # the very comparison it is meant to measure.
+        role = role.model_copy(update={"temperature": 0.0, "cache": True})
+        return await ctx.run.gateway.complete_structured(
+            RoleName.JUDGE,
+            role,
+            _PROBE_PROMPT,
+            {
+                "instruction": clip(instruction, settings.max_instruction_chars),
+                "continuation": clip(continuation, settings.max_generation_chars),
+            },
+            ProbeVerdict,
+        )
+
+    async def _probe_one(
+        self,
+        instruction: str,
+        index: int,
+        ctx: StageContext,
+        settings: CapabilityProbeSettings,
+    ) -> JsonObject:
+        """Generate and score both sides for one prompt; degrade, never abort.
+
+        A failed generation or verdict on one side leaves that probe out of the
+        signals but in the artifact with the error named — the compaction
+        precedent. A probe that silently vanished would overstate the adapter.
+        """
+        base_role = self._gen_role(ctx, RoleName.TARGET, settings)
+        adapter_role = self._gen_role(ctx, RoleName.ADAPTER, settings)
+        row: JsonObject = {"id": f"probe_{index}", "instruction": instruction}
+        for side, role, config in (
+            ("base", RoleName.TARGET, base_role),
+            ("adapter", RoleName.ADAPTER, adapter_role),
+        ):
+            try:
+                continuation = await self._generate(instruction, role, config, ctx, settings)
+                verdict = await self._judge(instruction, continuation, ctx, settings)
+            except LlmError as exc:
+                row[side] = {"error": str(exc)}
+                continue
+            row[side] = {
+                "correctness": verdict.correctness,
+                "clarity": verdict.clarity,
+                "verbosity_chars": float(len(continuation)),
+                "format_valid": _format_valid(continuation),
+                "reason": verdict.reason,
+            }
+        return row
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        """Probe both models on the fixed prompt set and emit paired deltas."""
+        settings = ctx.settings(self.settings_model)
+        rows = list(
+            await asyncio.gather(
+                *(
+                    self._probe_one(instruction, index, ctx, settings)
+                    for index, instruction in enumerate(_PROBE_PROMPTS, start=1)
+                )
+            )
+        )
+
+        baseline: dict[str, list[float]] = {name: [] for name, _dir in self._SIGNALS}
+        tuned: dict[str, list[float]] = {name: [] for name, _dir in self._SIGNALS}
+        scored = 0
+        for row in rows:
+            base, adapter = row["base"], row["adapter"]
+            if not isinstance(base, dict) or not isinstance(adapter, dict):
+                continue  # one side errored: kept in the artifact, out of the signals
+            if "error" in base or "error" in adapter:
+                continue
+            scored += 1
+            for name, _dir in self._SIGNALS:
+                baseline[name].append(float(base[name]))  # type: ignore[arg-type]
+                tuned[name].append(float(adapter[name]))  # type: ignore[arg-type]
+
+        signals = [
+            make_signal(
+                name, baseline[name], tuned[name], direction=direction, seed=ctx.config.seed
+            )
+            for name, direction in self._SIGNALS
+        ]
+        # build_dashboard without a friction_avoidance signal leaves the
+        # friction-drop headline at its default zero; the note says plainly
+        # that the headline does not apply to this instrument.
+        dashboard = build_dashboard(
+            signals,
+            episodes=scored,
+            seeds=[ctx.config.seed],
+            notes=[
+                "capability probe: general-capability regression check on fixed "
+                "corpus-independent prompts; the friction_drop headline does "
+                "not apply here (no friction_avoidance axis)",
+            ],
+        )
+        ctx.emit_json("probe_dashboard", dashboard)
+        ctx.emit_jsonl("probe", rows)
+        ctx.emit_text("report", render_dashboard(dashboard))
+        if scored == 0:
+            note = "every probe failed on at least one side; no paired signal"
+            ctx.logger.warning(note)
+            return StageResult.from_context(ctx, metrics={"scored": 0.0}, notes=[note])
+        primary = dashboard.signal("correctness")
+        return StageResult.from_context(
+            ctx,
+            metrics={
+                "scored": float(scored),
+                "base_correctness": primary.baseline if primary else 0.0,
+                "adapter_correctness": primary.tuned if primary else 0.0,
+            },
+            notes=dashboard.notes,
+        )
+
+
+# ---------------------------------------------------------------------------
 # registry helper
 # ---------------------------------------------------------------------------
 
@@ -1200,6 +1446,7 @@ EXTENSION_STAGES: tuple[type[Stage], ...] = (
     EvaluateSimUser,
     EvaluateExternal,
     LearningCurve,
+    CapabilityProbe,
 )
 
 

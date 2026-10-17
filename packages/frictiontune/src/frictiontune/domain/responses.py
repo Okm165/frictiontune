@@ -114,6 +114,24 @@ class ReplayVerdict(DomainModel):
     clarity: Score
 
 
+class ProbeVerdict(DomainModel):
+    """judge response for one general-capability probe completion.
+
+    The forgetting probe's instrument: a *narrower* :class:`ReplayVerdict`. The
+    probe replays prompts that have no friction context, so `friction_avoidance`
+    would ask the judge to invent a rubric — a field a stage converts back into
+    nothing is ceremony, and ceremony is a place for the model to run away. What
+    a regression check needs is exactly: is the answer still right, and is it
+    still usable.
+    """
+
+    # `reason` first, as in every verdict: the rationale is written before the
+    # scores, which makes the scores deliberate rather than post-hoc.
+    reason: str = ""
+    correctness: Score
+    clarity: Score
+
+
 class DedupVerdict(DomainModel):
     """dedup response."""
 
