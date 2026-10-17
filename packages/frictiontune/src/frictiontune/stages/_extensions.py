@@ -8,6 +8,7 @@ orchestrator refuses to run a Tier C stage unless ``allow_gated`` is set.
 from __future__ import annotations
 
 import asyncio
+import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -17,12 +18,14 @@ from frictiontune.backends.models import (
     GrpoRequest,
     RolloutRequest,
     RolloutResult,
+    TrainingRequest,
     TrainingResult,
 )
 from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.errors import ConfigError, StageError
 from frictiontune.core.hashing import file_sha256
-from frictiontune.domain.dataset import TrainingExample
+from frictiontune.domain.base import BaseProbe
+from frictiontune.domain.dataset import SFTRecord, TrainingExample
 from frictiontune.domain.episodes import Episode, ReducedSpan
 from frictiontune.domain.friction import FrictionEvent
 from frictiontune.domain.ids import example_id
@@ -45,10 +48,12 @@ from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 from frictiontune.reporting.dashboard import build_dashboard, make_signal, relative_drop
 from frictiontune.reporting.report import render_dashboard
 from frictiontune.stages.common import clip, read_events_by_episode, render_transcript
+from frictiontune.stages.train_sft import TrainSftSettings, _epochs_for
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from frictiontune.core.json import JsonObject
     from frictiontune.pipeline.context import RunContext, StageContext
 
 # ---------------------------------------------------------------------------
@@ -976,6 +981,211 @@ class EvaluateExternal(Stage):
 
 
 # ---------------------------------------------------------------------------
+# learning curve — the data-volume instrument
+# ---------------------------------------------------------------------------
+
+
+class LearningCurveSettings(StageSettings):
+    """Knobs for the learning-curve sweep.
+
+    The curve re-trains on growing subsets of the *same* training set with the
+    same hyperparameters as `train_sft`, so the only thing that varies is data
+    volume. ``repeats`` draws per fraction average out subset-selection noise;
+    Mahmood et al. (2022) warn that power-law extrapolation from few points is
+    unstable, so the stage reports the curve, never a fitted forecast.
+    """
+
+    fractions: list[float] = Field(
+        default_factory=lambda: [0.25, 0.5, 0.75, 1.0],
+    )
+    repeats: int = Field(default=1, ge=1)
+
+
+class LearningCurve(Stage):
+    """Train on growing subsets of the SFT set and tabulate best val loss.
+
+    The instrument behind GAP-093: whether more data would help is an empirical
+    property of the curve, not a judgement call. In Hestness et al.'s (2017)
+    terms it locates the corpus on the small-data / power-law / irreducible
+    trajectory — a curve still falling at the full training set says data
+    volume binds; a flat curve says it does not, and tuning or quality is the
+    lever instead. Fine-tuning loss is expected to follow roughly
+    ``L(D) ≈ C·|D|^-β + E`` (Zhang et al. 2024); the stage draws the curve and
+    leaves the fit to the reader rather than extrapolating from four points.
+    """
+
+    spec = StageSpec(
+        name="learning_curve",
+        tier=Tier.C,
+        requires_llm=False,
+        lead=_EXT,
+        roi="Medium",
+        justification=(
+            "Answers 'is more data the lever' directly; without it the "
+            "over/under-fitting question is half-answered (GAP-093)."
+        ),
+        evidence=[
+            "v12: 17 train records, 30-epoch ceiling, eval-loss min at ~8 epochs",
+            "LIMA-style corpora sit orders of magnitude larger; the curve says "
+            "which side of the knee this corpus is on",
+        ],
+        cost=CostProfile(compute="gpu", api_usd="none", maintenance="low"),
+        inputs={"train": "jsonl", "val": "jsonl", "base_probe": "json"},
+        outputs={"learning_curve": "json", "report": "text"},
+        kill_criterion=("Drop if the full-size point stops reproducing train_sft's val loss."),
+        gated_by=_gated("a full sweep costs one training run per point"),
+    )
+    settings_model = LearningCurveSettings
+
+    async def run(self, ctx: StageContext) -> StageResult:
+        """Train each subset and emit the curve."""
+        settings = ctx.settings(self.settings_model)
+        # Hyperparameters come from train_sft's block, not this stage's: the
+        # curve must vary data volume *only*, and the full-size point has to be
+        # comparable with the pipeline's actual training run.
+        train_settings = ctx.settings(TrainSftSettings)
+        probe = BaseProbe.model_validate(ctx.catalog.read_json("base_probe"))
+        if not probe.trainable:
+            raise StageError(
+                "learning_curve",
+                f"base model {probe.repo_id!r} is not trainable ({'; '.join(probe.notes)})",
+            )
+        train_records = list(ctx.catalog.stream("train", SFTRecord))
+        val_entry = ctx.catalog.get("val")
+        val_dir = str(Path(val_entry.path).parent)
+        backend = ctx.run.backends.training()
+
+        points: list[JsonObject] = []
+        for fraction, repeat in _sweep(settings.fractions, settings.repeats):
+            subset = _subset(train_records, fraction, repeat, ctx.config.seed)
+            subset_dir = ctx.store.directory / _point_name(fraction, repeat)
+            subset_dir.mkdir(parents=True, exist_ok=True)
+            sink = (subset_dir / "train.jsonl").open("w", encoding="utf-8")
+            for record in subset:
+                sink.write(record.model_dump_json() + "\n")
+            sink.close()
+            epochs = _epochs_for(len(subset), ctx.config.hardware, train_settings)
+            request = TrainingRequest(
+                base_model=probe.path or probe.repo_id,
+                dataset_dir=str(subset_dir),
+                output_dir=str(subset_dir / "adapter"),
+                hardware=ctx.config.hardware,
+                seed=ctx.config.seed,
+                max_seq_len=ctx.config.hardware.max_seq_len,
+                learning_rate=train_settings.learning_rate,
+                epochs=epochs,
+                lora_r=train_settings.lora_r,
+                lora_alpha=train_settings.lora_alpha,
+                lora_dropout=train_settings.lora_dropout,
+                target_modules=train_settings.target_modules or probe.target_modules,
+                target_parameters=probe.target_parameters,
+                resume_from=None,
+                max_steps=-1,
+                save_steps=train_settings.save_steps,
+                eval_dir=val_dir,
+            )
+            ctx.logger.info(
+                "learning-curve point",
+                fraction=fraction,
+                repeat=repeat,
+                n_train=len(subset),
+                epochs=epochs,
+            )
+            result: TrainingResult = await backend.train(request)
+            points.append(
+                {
+                    "fraction": fraction,
+                    "repeat": repeat,
+                    "n_train": len(subset),
+                    "epochs": epochs,
+                    "steps": result.steps,
+                    "train_loss": result.train_loss,
+                    # The best held-out loss is what load_best_model_at_end
+                    # selected on — the curve's y-axis.
+                    "best_eval_loss": result.metrics.get(
+                        "best_eval_loss", result.metrics.get("eval_loss")
+                    ),
+                    "wall_time_s": result.wall_time_s,
+                }
+            )
+            ctx.emit_json("learning_curve", {"points": points, "val_records": val_entry.ref.rows})
+
+        # The one derived indicator: relative val-loss improvement between the
+        # two largest trained sizes. A still-falling curve at the full size is
+        # the signature of data-bound underfitting; a flat one says volume is
+        # not the lever. Descriptive statistics, not an agent verdict — the
+        # curve itself is the evidence.
+        by_size = sorted(points, key=lambda point: (point["n_train"], point["fraction"]))
+        note = ""
+        if len(by_size) >= 2:
+            last, prev = by_size[-1], by_size[-2]
+            prev_loss = prev.get("best_eval_loss")
+            last_loss = last.get("best_eval_loss")
+            # JsonObject values are JsonValue unions; the trainer's metrics dict
+            # holds floats, and the isinstance narrowing is what tells mypy so.
+            if isinstance(prev_loss, float) and isinstance(last_loss, float):
+                improvement = (prev_loss - last_loss) / prev_loss
+                note = (
+                    f"val loss {'falls' if improvement > 0 else 'rises'} by "
+                    f"{abs(improvement) * 100:.1f}% from n={prev['n_train']} to "
+                    f"n={last['n_train']}"
+                )
+        body_lines = [
+            "# Learning curve\n",
+            "| fraction | repeat | n_train | epochs | steps | train loss "
+            "| best val loss | wall s |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for point in points:
+            body_lines.append(
+                f"| {point['fraction']:g} | {point['repeat']} | {point['n_train']} "
+                f"| {point['epochs']:g} | {point['steps']} | {point['train_loss']:.4f} "
+                f"| {_fmt_loss(point.get('best_eval_loss'))} | {point['wall_time_s']:.0f} |"
+            )
+        if note:
+            body_lines += ["", f"- {note}."]
+        body_lines += [
+            "",
+            "- best val loss is the checkpoint `load_best_model_at_end` selected;",
+            "  hyperparameters are train_sft's, so only data volume varies.",
+            "- a curve still falling at the largest n means data volume binds;",
+            "  a flat curve means the corpus (of this quality mix) is not the lever.",
+        ]
+        ctx.emit_text("report", "\n".join(body_lines) + "\n")
+        largest_n = max(
+            int(point["n_train"]) for point in points if isinstance(point["n_train"], int)
+        )
+        return StageResult.from_context(
+            ctx,
+            metrics={
+                "points": float(len(points)),
+                "largest_n": float(largest_n),
+            },
+        )
+
+
+def _sweep(fractions: list[float], repeats: int) -> list[tuple[float, int]]:
+    """Expand fractions x repeats into a deduplicated, ordered sweep."""
+    valid = sorted({round(min(max(fraction, 0.01), 1.0), 4) for fraction in fractions})
+    return [(fraction, repeat) for fraction in valid for repeat in range(1, repeats + 1)]
+
+
+def _subset(records: list[SFTRecord], fraction: float, repeat: int, seed: int) -> list[SFTRecord]:
+    """Draw a deterministic subset: seeded, sorted by id, at least one record."""
+    count = max(1, min(len(records), round(len(records) * fraction)))
+    rng = random.Random(f"{seed}:{fraction}:{repeat}")
+    return sorted(rng.sample(records, count), key=lambda record: record.id)
+
+
+def _point_name(fraction: float, repeat: int) -> str:
+    return f"curve_f{round(fraction * 100):03d}_r{repeat}"
+
+
+def _fmt_loss(loss: object) -> str:
+    return f"{float(loss):.4f}" if isinstance(loss, (int, float)) else "n/a"
+
+
+# ---------------------------------------------------------------------------
 # registry helper
 # ---------------------------------------------------------------------------
 
@@ -989,6 +1199,7 @@ EXTENSION_STAGES: tuple[type[Stage], ...] = (
     TrainGrpo,
     EvaluateSimUser,
     EvaluateExternal,
+    LearningCurve,
 )
 
 

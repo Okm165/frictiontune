@@ -333,6 +333,12 @@ def run_sft(request: TrainingRequest) -> TrainingResult:
         for key, value in entry.items():
             if key.startswith("eval_") and isinstance(value, (int, float)):
                 metrics[key] = float(value)
+    # The best held-out loss is what `load_best_model_at_end` selected on; it is
+    # the y-axis of any learning curve drawn over training subsets, so it is
+    # surfaced explicitly rather than left for callers to re-derive from the
+    # per-epoch history.
+    if trainer.state.best_metric is not None:
+        metrics["best_eval_loss"] = float(trainer.state.best_metric)
     history = [entry for entry in trainer.state.log_history if "loss" in entry]
     train_loss, final_loss = _select_losses(metrics, history)
     return TrainingResult(

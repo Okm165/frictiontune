@@ -41,6 +41,7 @@ EXTENSION_EDGES: Mapping[str, tuple[str, ...]] = {
     "segment": ("reduce", "raft_srft"),
     "friction_detect": ("attribute", "friction_cluster", "raft_srft"),
     "friction_cluster": ("synthesize",),
+    "decontaminate": ("learning_curve",),
     "mine": ("synthesize",),
     "judge": ("train_grpo",),
     "train_sft": ("train_grpo", "rollout", "evaluate_sim_user", "evaluate_external"),

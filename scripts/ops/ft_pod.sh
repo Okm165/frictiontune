@@ -565,6 +565,20 @@ cmd_train() {
   run_pipeline train fetch_base,train_sft none --cached-deps
 }
 
+cmd_curve() {
+  # The learning-curve instrument (GAP-093, Tier C gated): re-train on growing
+  # subsets of decontaminate's training set with train_sft's hyperparameters and
+  # tabulate the best val loss per size. Needs GPUs (it is four training runs),
+  # needs no endpoint (it calls no LLM), and needs decontaminate + fetch_base
+  # cached — the same preconditions as the train phase.
+  ensure_pod
+  stop_llm
+  stop_embed
+  stop_servers
+  start_monitor
+  run_pipeline curve fetch_base,learning_curve none --cached-deps --allow-gated
+}
+
 # Phase 3 — replay + export. Two served models on GPU0/1; the judge (if local)
 # and nothing else on GPU2.
 cmd_replay() {
@@ -662,6 +676,7 @@ case "${action}" in
   build)  cmd_build "$@" ;;
   data)   cmd_data "$@" ;;
   train)  cmd_train "$@" ;;
+  curve)  cmd_curve "$@" ;;
   replay) cmd_replay "$@" ;;
   all)    cmd_all "$@" ;;
   serve)  cmd_serve "$@" ;;
