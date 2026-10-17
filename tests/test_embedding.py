@@ -73,3 +73,51 @@ def test_embed_rejects_short_response(tmp_path: Path) -> None:
 
     with pytest.raises(LlmError, match="returned 1 vectors for 2 texts"):
         asyncio.run(embedder.embed(["a", "b"]))
+
+
+def test_fit_bounds_long_input_keeping_both_ends(tmp_path: Path) -> None:
+    cache = ContentCache(tmp_path)
+    embedder = OpenAiEmbedder(
+        EmbeddingConfig(model="m", base_url="http://a/v1", max_input_chars=32), cache
+    )
+
+    fitted = embedder._fit("HEAD" + "x" * 200 + "TAIL")
+
+    assert len(fitted) <= 32
+    assert fitted.startswith("HEAD")
+    assert fitted.endswith("TAIL")
+    assert "..." in fitted
+
+
+def test_fit_leaves_short_input_untouched(tmp_path: Path) -> None:
+    cache = ContentCache(tmp_path)
+    embedder = OpenAiEmbedder(
+        EmbeddingConfig(model="m", base_url="http://a/v1", max_input_chars=32), cache
+    )
+
+    assert embedder._fit("short") == "short"
+
+
+def test_embed_sends_the_bounded_input(tmp_path: Path) -> None:
+    import asyncio
+
+    seen: list[list[str]] = []
+
+    class _Embeddings:
+        async def create(self, **kwargs: object) -> SimpleNamespace:
+            seen.append(cast("list[str]", kwargs["input"]))
+            return SimpleNamespace(data=[SimpleNamespace(index=0, embedding=[1.0])])
+
+    class _Client:
+        embeddings = _Embeddings()
+
+    embedder = OpenAiEmbedder(
+        EmbeddingConfig(model="m", base_url="http://a/v1", cache=False, max_input_chars=16),
+        ContentCache(tmp_path),
+    )
+    embedder._client = cast("Any", _Client())
+
+    asyncio.run(embedder.embed(["y" * 200]))
+
+    assert len(seen) == 1
+    assert len(seen[0][0]) <= 16

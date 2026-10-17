@@ -1,0 +1,52 @@
+# Bitdeer OpenAI-compatible endpoints. Select with `--environment bitdeer`.
+#
+# Two provider capabilities are declared here rather than in the neutral
+# `roles.yaml`, because they depend on the endpoint, not on the pipeline:
+#
+# 1. Chain-of-thought control. The hosted GLM-5.3-Flash (and the Qwen models on
+#    the same endpoint) default to a `reasoning_content` stream that counts
+#    against `max_tokens`. On the analyst-side structured calls that stream can
+#    consume the whole completion budget and leave `content` empty, so every JSON
+#    reply fails with "no JSON object". These roles answer in JSON and thinking
+#    buys nothing but latency, tokens, and truncation risk, so it is disabled.
+# 2. Grammar-constrained decoding. This endpoint honours `response_format:
+#    json_schema`, so structured calls are schema-proof (no stray fields, no
+#    stringified scalars) and the repair loop is only a safety net.
+#
+# The model-under-test roles (`target`, `adapter`) are deliberately left alone:
+# they must keep their native behaviour, including reasoning, so a replay
+# measures the real model.
+llm:
+  router: &structured_json
+    response_format: json_schema
+    # The Bitdeer origin (behind Cloudflare) sheds load in multi-minute 502
+    # storms. The shared retry honours `Retry-After` (60 s here) and only
+    # retries transport-transient errors, so the default 5-attempt budget spans
+    # ~4 minutes of outage. Ten attempts widen that to the observed storm
+    # length without ever retrying a schema or validation failure, which is not
+    # transport-transient.
+    retry:
+      max_attempts: 10
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
+  schema_inferer: *structured_json
+  friction_analyst: *structured_json
+  recovery_finder: *structured_json
+  attributor: *structured_json
+  rule_compiler: *structured_json
+  rule_verifier: *structured_json
+  judge: *structured_json
+  dedup: *structured_json
+  teacher: *structured_json
+  user_simulator: *structured_json
+
+  # The compactor also runs redaction review, and its prompts are the largest
+  # (a whole tool output), so it was previously throttled to concurrency 2.
+  # That is the dominant cost of `normalize` — one call per long tool output —
+  # and the shared retry already honours `Retry-After` (header or error body)
+  # and exponential backoff, so a low ceiling just serialises the work instead
+  # of shielding the endpoint. Held at parity with the other bulk roles.
+  compactor:
+    <<: *structured_json
+    concurrency: 8

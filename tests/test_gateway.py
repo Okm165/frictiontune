@@ -8,13 +8,13 @@ validates and feed back a concise problem when none does.
 from __future__ import annotations
 
 from frictiontune.domain.trace import DomainModel
-from frictiontune.domain.types import IntLike
+from frictiontune.domain.types import NonNegativeInt
 from frictiontune.llm.gateway import LlmGateway
 
 
 class _Verdict(DomainModel):
     ok: bool
-    n: IntLike = 0
+    n: NonNegativeInt = 0
 
 
 def test_validate_picks_the_candidate_that_validates() -> None:

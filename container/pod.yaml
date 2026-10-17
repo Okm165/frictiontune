@@ -1,0 +1,73 @@
+# Declarative pod for the CPU half of the pipeline plus its monitor sidecar.
+#
+# The volume host path is a `${FT_REPO}` placeholder (the repo carries no machine
+# specifics), so render it through the environment:
+#
+#   FT_REPO=$PWD envsubst < container/pod.yaml | podman kube play -
+#   FT_REPO=$PWD envsubst < container/pod.yaml | podman kube down -
+#
+# `make -C container pod` does exactly this.
+#
+# The two containers share a network namespace and the bind-mounted repository,
+# so the monitor sees the pipeline's registry the instant a stage lands.
+#
+# The pipeline container sources /work/.env itself (kube play cannot read a host
+# dotenv), so secrets are never duplicated into this file.
+#
+# GPU stages (`train_sft`, `evaluate_replay`, `export`) and the replay servers
+# need the accelerator granted into the pod. Rootless `kube play` cannot grant
+# devices reliably, so those stages use the imperative orchestrator, which
+# detects AMD (ROCm) or NVIDIA (CUDA) and passes the right grants:
+#
+#   scripts/ops/ft_pod.sh train        # pipeline + DDP training + monitor
+#
+# Everything here is a template: adjust `args` to run a different slice.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: frictiontune
+  labels:
+    app: frictiontune
+spec:
+  restartPolicy: Never
+  containers:
+    # ── the pipeline: CPU/LLM stages through rule verification ────────────────
+    - name: pipeline
+      image: localhost/frictiontune:data
+      workingDir: /work
+      command:
+        - /bin/bash
+        - -lc
+        - |
+          set -a; [ -f /work/.env ] && . /work/.env; set +a
+          exec ft-cli run --stage verify_rules --include-deps "$@"
+        - --
+        - --pipeline
+        - v10
+        - --hardware
+        - 3x24g
+        - --environment
+        - bitdeer
+        - --set
+        - paths.corpus_db=.context/medium.db
+        - --set
+        - stages.evaluate_replay.max_examples=16
+      volumeMounts:
+        - { name: work, mountPath: /work }
+
+    # ── the monitor: keeps anomalies.json / ANALYSIS.md / gaps.md current ─────
+    - name: monitor
+      image: localhost/frictiontune:data
+      workingDir: /work
+      command:
+        - /bin/bash
+        - -lc
+        - exec python3 scripts/ops/analyze.py --root journal/runs --watch --interval 20
+      volumeMounts:
+        - { name: work, mountPath: /work }
+
+  volumes:
+    - name: work
+      hostPath:
+        path: ${FT_REPO}
+        type: Directory

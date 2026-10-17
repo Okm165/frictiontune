@@ -98,7 +98,6 @@ class Message(DomainModel):
     parts: list[Part] = Field(default_factory=list)
     agent: str | None = None
     model: str | None = None
-    raw: JsonObject | None = None
 
     def content_text(self) -> str:
         """Concatenate the text-bearing parts (reasoning + text + tool output)."""

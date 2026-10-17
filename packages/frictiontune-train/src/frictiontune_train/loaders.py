@@ -7,6 +7,7 @@ in. This module owns it once.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -37,8 +38,6 @@ def load_unsloth(
     quant: str,
 ) -> tuple[Any, Any] | None:
     """Try to load through Unsloth; return ``None`` when unavailable/disabled."""
-    import os
-
     if os.environ.get("FRICTIONTUNE_USE_UNSLOTH", "1") == "0":
         return None
     try:
@@ -57,8 +56,17 @@ def load_unsloth(
     return model, tokenizer
 
 
-def load_transformers_base(base_model: str, hardware: HardwareConfig) -> Any:
-    """Load a causal LM with optional 4-bit quantisation (transformers path)."""
+def load_transformers_base(
+    base_model: str, hardware: HardwareConfig, *, device_map: Any = "auto"
+) -> Any:
+    """Load a causal LM with optional 4-bit quantisation (transformers path).
+
+    ``device_map`` decides placement. ``"auto"`` is right for a single process
+    that sees one card and for inference/merge with every card visible (where
+    ``auto`` shards as intended). Under DDP each rank sees every card but must
+    hold the *whole* model on its own, so :mod:`frictiontune_train.distributed`
+    passes ``{"": local_rank}`` instead.
+    """
     torch = require("torch", hint=torch_hint())
     transformers = require("transformers", hint=torch_hint())
     quantization = None
@@ -72,10 +80,93 @@ def load_transformers_base(base_model: str, hardware: HardwareConfig) -> Any:
     return transformers.AutoModelForCausalLM.from_pretrained(
         base_model,
         quantization_config=quantization,
-        torch_dtype=compute_dtype(hardware, torch),
-        device_map="auto",
+        **_dtype_kwarg(transformers, compute_dtype(hardware, torch)),
+        device_map=device_map,
+        attn_implementation=_attention_implementation(transformers),
         trust_remote_code=True,
     )
+
+
+def _attention_implementation(transformers: Any) -> str:
+    """Choose the attention kernel, preferring a GQA-safe fused SDPA.
+
+    Grouped-query attention (Qwen3: 32 query heads, 8 KV heads) reaches
+    ``scaled_dot_product_attention`` as ``enable_gqa``. The ROCm build's fused
+    kernels reject that broadcast and silently fall back to the **math** kernel,
+    which materialises the full ``[batch, heads, seq, seq]`` score matrix — more
+    than ten gigabytes at an 8k window, enough to OOM a 24 GB card on the first
+    step. Transformers takes the ``enable_gqa`` path only when it sees *no*
+    attention mask, and it optimises away an all-ones mask, so a full-length
+    batch (no padding) always trips it.
+
+    The registered ``sdpa_gqa`` variant repeats the KV heads up to the query head
+    count — a few megabytes — before delegating to the stock SDPA function, so
+    the fused kernel applies instead of the math one. Registration goes through
+    the public ``AttentionInterface``, so a model asks for it by name exactly
+    like a built-in. ``FRICTIONTUNE_ATTN_IMPL`` overrides the choice (for
+    example ``eager`` when debugging); a transformers that lacks the interface
+    falls back to plain ``sdpa``.
+    """
+    override = os.environ.get("FRICTIONTUNE_ATTN_IMPL")
+    if override:
+        return override
+    try:
+        interface = transformers.modeling_utils.ALL_ATTENTION_FUNCTIONS
+        if "sdpa_gqa" not in interface.valid_keys():
+            from transformers.integrations.sdpa_attention import (
+                repeat_kv,
+                sdpa_attention_forward,
+            )
+
+            def sdpa_gqa(
+                module: Any,
+                query: Any,
+                key: Any,
+                value: Any,
+                attention_mask: Any = None,
+                dropout: float = 0.0,
+                scaling: Any = None,
+                is_causal: Any = None,
+                **kwargs: Any,
+            ) -> Any:
+                groups = getattr(module, "num_key_value_groups", 1)
+                if groups > 1 and key.shape[1] != query.shape[1]:
+                    key = repeat_kv(key, groups)
+                    value = repeat_kv(value, groups)
+                    keep = module.num_key_value_groups
+                    module.num_key_value_groups = 1
+                    try:
+                        return sdpa_attention_forward(
+                            module,
+                            query,
+                            key,
+                            value,
+                            attention_mask,
+                            dropout,
+                            scaling,
+                            is_causal,
+                            **kwargs,
+                        )
+                    finally:
+                        module.num_key_value_groups = keep
+                return sdpa_attention_forward(
+                    module, query, key, value, attention_mask, dropout, scaling, is_causal, **kwargs
+                )
+
+            interface.register("sdpa_gqa", sdpa_gqa)
+        return "sdpa_gqa"
+    except Exception:  # the fused kernel is an optimisation, not a requirement
+        return "sdpa"
+
+
+def _dtype_kwarg(transformers: Any, dtype: Any) -> dict[str, Any]:
+    """Spell the model dtype kwarg for the installed transformers.
+
+    transformers 5 renamed ``torch_dtype`` to ``dtype`` and warns the old name
+    will be removed; use whichever the installed major version documents.
+    """
+    major = int(str(transformers.__version__).split(".", 1)[0])
+    return {"dtype": dtype} if major >= 5 else {"torch_dtype": dtype}
 
 
 def prepare_for_training(model: Any, hardware: HardwareConfig) -> Any:
@@ -123,10 +214,12 @@ def apply_lora(
     return peft.get_peft_model(model, config)
 
 
-def continue_from_adapter(base_model: str, adapter_dir: str, hardware: HardwareConfig) -> Any:
+def continue_from_adapter(
+    base_model: str, adapter_dir: str, hardware: HardwareConfig, *, device_map: Any = "auto"
+) -> Any:
     """Load a trained adapter for continued training (GRPO after SFT)."""
     peft = require("peft", hint=torch_hint())
-    base = load_transformers_base(base_model, hardware)
+    base = load_transformers_base(base_model, hardware, device_map=device_map)
     base = prepare_for_training(base, hardware)
     return peft.PeftModel.from_pretrained(base, adapter_dir, is_trainable=True)
 

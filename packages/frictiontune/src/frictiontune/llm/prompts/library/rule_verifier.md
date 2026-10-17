@@ -1,6 +1,6 @@
 ---
 name: rule_verifier
-version: "3"
+version: "5"
 role: rule_verifier
 schema: RuleVerdict
 description: >
@@ -26,7 +26,9 @@ Rules:
 - A rule that never fires is not automatically bad, but it cannot be credited.
 - `prevents` must be true only if the instruction clearly addresses the exact
   failure, not an adjacent one.
-- Cite the turn indices supporting each answer in `evidence_turns`.
+- Cite at most the 2–3 turn indices that most directly support the verdict in
+  `evidence_turns`. Do NOT list every turn: a rule that fires does not need the
+  whole episode cited, and a rule that does not fire cites none.
 - `confidence` is your calibrated probability (0–1) in the verdict.
 - {{> untrusted-data }}
 - Keep `rationale` to one or two sentences.
@@ -34,16 +36,16 @@ Rules:
 :::
 
 :::user
-Rule:
-- applicability: {{applicability}}
-- instruction: {{instruction}}
-- verifier.spec: {{verifier_spec}}
-
 Episode: {{episode_id}}
-Targeted friction: {{friction_summary}}
 
 Transcript (turn_index | role | content):
 {{transcript}}
+
+Rule to evaluate:
+- applicability: {{applicability}}
+- instruction: {{instruction}}
+- verifier.spec: {{verifier_spec}}
+- targeted friction: {{friction_summary}}
 
 Reply with the JSON object.
 :::

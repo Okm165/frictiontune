@@ -27,14 +27,18 @@ from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 from frictiontune.reporting.report import render_friction_report
 from frictiontune.stages.common import (
     analyst_prompt_values,
-    bounded_gather,
     clip,
+    gather_tolerant,
     render_transcript,
     validate_event,
 )
 
 if TYPE_CHECKING:
-    from frictiontune.pipeline.context import StageContext
+    from collections.abc import Sequence
+
+    import structlog
+
+    from frictiontune.pipeline.context import PublishedSink, StageContext
 
 _ROUTER_PROMPT = "router"
 _ANALYST_PROMPT = "friction_analyst"
@@ -61,6 +65,52 @@ class _EpisodeOutcome:
     invalid: int = 0
 
 
+def absorb_batch(
+    batch: Sequence[Episode],
+    results: Sequence[_EpisodeOutcome | BaseException],
+    profile: FrictionProfile,
+    sink: PublishedSink,
+    logger: structlog.stdlib.BoundLogger,
+) -> int:
+    """Fold one batch's outcomes into ``profile``; return the invalid-event count.
+
+    A failed episode is *that episode's* outcome, not the batch's. The analyst's
+    ensemble refuses to decide on a quorum it does not have (``_healthy_passes``),
+    so such an episode contributes no events — but it is counted as ``unanalysed``
+    rather than allowed to take the stage down with it. Counting it separately
+    keeps ``coverage()`` a statement about the episodes that *were* analysed.
+    """
+    invalid = 0
+    for episode, result in zip(batch, results, strict=True):
+        if isinstance(result, BaseException):
+            profile.unanalysed += 1
+            logger.warning(
+                "episode could not be analysed",
+                episode_id=episode.id,
+                reason=type(result).__name__,
+                error=str(result),
+            )
+            continue
+        profile.episodes_analysed += 1
+        invalid += result.invalid
+        if result.routed_clean:
+            continue
+        if result.abstained:
+            profile.abstentions += 1
+        if result.events:
+            profile.episodes_with_friction += 1
+        profile.total_events += len(result.events)
+        for event in result.events:
+            sink.write(event)
+            profile.by_form[event.form] = profile.by_form.get(event.form, 0) + 1
+            profile.by_cause[event.cause] = profile.by_cause.get(event.cause, 0) + 1
+            profile.by_leaf[event.leaf] = profile.by_leaf.get(event.leaf, 0) + 1
+            profile.by_resolution[event.resolution] = (
+                profile.by_resolution.get(event.resolution, 0) + 1
+            )
+    return invalid
+
+
 def _evidence_overlap(a: FrictionEventDraft, b: FrictionEventDraft) -> bool:
     """Whether two drafts cite at least one common transcript turn."""
     return bool({span.turn for span in a.evidence} & {span.turn for span in b.evidence})
@@ -69,6 +119,24 @@ def _evidence_overlap(a: FrictionEventDraft, b: FrictionEventDraft) -> bool:
 def _vote_threshold(passes: int) -> int:
     """Strict majority of independent passes (2 of 2, 2 of 3, 3 of 4)."""
     return passes // 2 + 1
+
+
+def _healthy_passes(
+    results: Sequence[FrictionAnalysis | BaseException], *, passes: int
+) -> list[FrictionAnalysis]:
+    """Keep the ensemble passes that completed; raise only when too few survive.
+
+    A single transient failure must not abort the whole stage, but nor may it
+    silently lower the bar: consensus still needs ``_vote_threshold(passes)``
+    independent passes, so when fewer survive we surface the failure instead of
+    deciding on a quorum we do not have.
+    """
+    healthy = [result for result in results if isinstance(result, FrictionAnalysis)]
+    if len(healthy) < _vote_threshold(passes):
+        failure = next((result for result in results if isinstance(result, BaseException)), None)
+        if failure is not None:
+            raise failure
+    return healthy
 
 
 def _merge_ensemble(
@@ -107,12 +175,13 @@ def _merge_ensemble(
         if votes < threshold:
             continue
         best = max((draft for _pass, draft in cluster), key=lambda item: item.confidence)
-        mean_confidence = sum(draft.confidence for _pass, draft in cluster) / len(cluster)
+        # Round the averaged probability so artifacts do not carry float noise
+        # (e.g. 0.5900000000000001); 4 decimals is finer than the model's
+        # calibration and keeps the JSON readable.
+        mean_confidence = round(sum(draft.confidence for _pass, draft in cluster) / len(cluster), 4)
         merged.append(
             (
                 FrictionEventDraft(
-                    form=best.form,
-                    cause=best.cause,
                     cost=best.cost,
                     resolution=best.resolution,
                     leaf=best.leaf,
@@ -133,6 +202,8 @@ class FrictionDetect(Stage):
         name="friction_detect",
         tier=Tier.A,
         requires_llm=True,
+        prompts=["router", "friction_analyst"],
+        roles=[RoleName.ROUTER, RoleName.FRICTION_ANALYST],
         lead=Lead.CORE,
         roi="High",
         justification="The signal: no labels means no rules, no data, and no metric.",
@@ -197,18 +268,25 @@ class FrictionDetect(Stage):
             return [(event, 1) for event in analysis.events], analysis.abstain
 
         sampling = role.model_copy(update={"cache": False})
-        results = await asyncio.gather(
-            *(
-                ctx.run.gateway.complete_structured(
-                    RoleName.FRICTION_ANALYST, sampling, _ANALYST_PROMPT, values, FrictionAnalysis
-                )
-                for _ in range(passes)
+        calls = [
+            ctx.run.gateway.complete_structured(
+                RoleName.FRICTION_ANALYST, sampling, _ANALYST_PROMPT, values, FrictionAnalysis
             )
-        )
+            for _ in range(passes)
+        ]
+        results = await asyncio.gather(*calls, return_exceptions=True)
         threshold = _vote_threshold(passes)
+        healthy = _healthy_passes(results, passes=passes)
+        if len(healthy) < passes:
+            ctx.logger.warning(
+                "analyst ensemble degraded: some passes failed",
+                episode_id=episode.id,
+                passes=passes,
+                succeeded=len(healthy),
+            )
         return (
-            _merge_ensemble([list(result.events) for result in results], threshold=threshold),
-            any(result.abstain for result in results),
+            _merge_ensemble([list(result.events) for result in healthy], threshold=threshold),
+            any(result.abstain for result in healthy),
         )
 
     async def _process(
@@ -217,14 +295,29 @@ class FrictionDetect(Stage):
         if not await self._route(episode, ctx, settings):
             return _EpisodeOutcome(episode_id=episode.id, routed_clean=True)
 
+        taxonomy = ctx.config.taxonomy
         drafts, abstained = await self._analyse(episode, ctx, settings)
         events: list[FrictionEvent] = []
         invalid = 0
         for draft, votes in drafts:
+            # form/cause are a declared function of the leaf, so the plumbing
+            # derives them instead of asking the model to restate the mapping.
+            axes = taxonomy.leaves.get(draft.leaf)
+            if axes is None and settings.taxonomy_enforcement:
+                invalid += 1
+                ctx.logger.warning(
+                    "dropped friction event with unknown leaf",
+                    episode_id=episode.id,
+                    leaf=draft.leaf,
+                )
+                continue
+            form, cause = (axes.form, axes.cause) if axes is not None else ("unknown", "unknown")
             event = FrictionEvent(
                 id=event_id(episode.id, len(events)),
                 episode_id=episode.id,
                 ensemble_votes=votes,
+                form=form,
+                cause=cause,
                 **draft.model_dump(),
             )
             if settings.taxonomy_enforcement:
@@ -249,40 +342,16 @@ class FrictionDetect(Stage):
         profile = FrictionProfile()
         sink = ctx.jsonl_sink("friction_events")
         total_invalid = 0
-        concurrency = ctx.config.role(RoleName.FRICTION_ANALYST).concurrency
-
-        def absorb(outcome: _EpisodeOutcome) -> None:
-            nonlocal total_invalid
-            profile.episodes_analysed += 1
-            if outcome.routed_clean:
-                return
-            if outcome.abstained:
-                profile.abstentions += 1
-            if outcome.events:
-                profile.episodes_with_friction += 1
-            profile.total_events += len(outcome.events)
-            total_invalid += outcome.invalid
-            for event in outcome.events:
-                sink.write(event)
-                profile.by_form[event.form] = profile.by_form.get(event.form, 0) + 1
-                profile.by_cause[event.cause] = profile.by_cause.get(event.cause, 0) + 1
-                profile.by_leaf[event.leaf] = profile.by_leaf.get(event.leaf, 0) + 1
-                profile.by_resolution[event.resolution] = (
-                    profile.by_resolution.get(event.resolution, 0) + 1
-                )
-
         batch: list[Episode] = []
 
         async def flush() -> None:
+            nonlocal total_invalid
             if not batch:
                 return
-            outcomes: list[_EpisodeOutcome] = await bounded_gather(
-                lambda episode: self._process(episode, ctx, settings),
-                batch,
-                limit=concurrency,
+            results = await gather_tolerant(
+                lambda episode: self._process(episode, ctx, settings), batch
             )
-            for outcome in outcomes:
-                absorb(outcome)
+            total_invalid += absorb_batch(batch, results, profile, sink, ctx.logger)
             batch.clear()
 
         for episode in ctx.catalog.stream("episodes", Episode):
@@ -292,8 +361,8 @@ class FrictionDetect(Stage):
         await flush()
         sink.close()
 
-        ctx.emit_json("friction_profile.json", profile)
-        ctx.emit_text("report.md", render_friction_report(profile))
+        ctx.emit_json("friction_profile", profile)
+        ctx.emit_text("report", render_friction_report(profile))
         return StageResult.from_context(
             ctx,
             metrics={
@@ -302,6 +371,7 @@ class FrictionDetect(Stage):
                 "events": float(profile.total_events),
                 "coverage": profile.coverage(),
                 "abstentions": float(profile.abstentions),
+                "unanalysed": float(profile.unanalysed),
                 "invalid_events": float(total_invalid),
                 "mean_events_per_episode": (
                     profile.total_events / profile.episodes_analysed

@@ -1,3 +1,23 @@
 # export: merge the adapter (or package the LoRA) with a parity probe.
 method: merge
-probe_prompts: []
+# The parity probe is the *only* evidence that a merge was faithful, and a merge
+# that loads but answers differently is the failure mode this stage exists to
+# catch. An empty default made the check vacuous: the first end-to-end run
+# reported `merged: True` with `parity: 0/0`, which reads like a pass and is
+# actually an absence.
+#
+# Five probes, not one. Generation is greedy (`do_sample=False`), but a 4-bit
+# model answering a one-line prompt can sit on a near-tie, and ROCm's reduction
+# order is not fixed — with two probes the first end-to-end runs reported 2/2,
+# then 1/2, then 2/2, and *which* probe flipped changed each time. At n=2 that
+# is a coin flip. The failure this checks for — a merge that loads but answers
+# differently — fails **every** probe, so a majority is a robust signal while a
+# single flip stays visible as a single flip. Prompts are short and factual
+# because those continuations are the most stable; the comparison is against the
+# same weights loaded through the adapter, so no expected text is needed.
+probe_prompts:
+  - "Reply with exactly one word: ready"
+  - "What is 2 + 2? Reply with the number only."
+  - "Name the capital of France. Reply with one word."
+  - "Say ok and nothing else."
+  - "Write the single word: test"

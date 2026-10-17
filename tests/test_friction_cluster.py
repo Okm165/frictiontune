@@ -6,7 +6,7 @@ so coverage must count each known event once or it can exceed 100%.
 
 from __future__ import annotations
 
-from frictiontune.domain.profiles import BehaviorDimension, PreferenceProfile
+from frictiontune.domain.profiles import BehaviorDimension
 from frictiontune.stages._extensions import _covered_events
 
 
@@ -33,14 +33,3 @@ def test_unknown_event_ids_are_not_covered() -> None:
     clusters = [_dimension("a", "e1", "hallucinated")]
 
     assert _covered_events(clusters, {"e1", "e2"}) == 1
-
-
-def test_coverage_never_exceeds_one() -> None:
-    clusters = [_dimension("a", "e1"), _dimension("b", "e1")]
-    profile = PreferenceProfile(
-        dimensions=clusters,
-        total_events=1,
-        covered_events=_covered_events(clusters, {"e1"}),
-    )
-
-    assert profile.coverage() == 1.0

@@ -55,13 +55,3 @@ class TokenStats(DomainModel):
         if self.total_tokens == 0:
             return 0.0
         return self.trained_tokens / self.total_tokens
-
-
-class DataSplits(DomainModel):
-    """The train/eval partition produced by curation and decontamination."""
-
-    train: list[TrainingExample] = Field(default_factory=list)
-    eval: list[TrainingExample] = Field(default_factory=list)
-    dropped_duplicates: int = 0
-    dropped_contaminated: int = 0
-    time_boundary: int | None = None

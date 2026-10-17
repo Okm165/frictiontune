@@ -8,7 +8,6 @@ disqualifying on adherence or correctness.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 
 from frictiontune.config.models import RoleName
@@ -16,7 +15,11 @@ from frictiontune.domain.dataset import TrainingExample
 from frictiontune.domain.responses import JudgeVerdict
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
-from frictiontune.stages.common import clip, render_transcript
+from frictiontune.stages.common import (
+    clip,
+    gather_tolerant,
+    render_transcript,
+)
 
 if TYPE_CHECKING:
     from frictiontune.pipeline.context import StageContext
@@ -51,6 +54,8 @@ class Judge(Stage):
         name="judge",
         tier=Tier.A,
         requires_llm=True,
+        prompts=["judge"],
+        roles=[RoleName.JUDGE],
         lead=Lead.CORE,
         roi="High",
         justification="LIMA: unfiltered data hurts; this gate protects every downstream stage.",
@@ -97,17 +102,24 @@ class Judge(Stage):
         """Score every candidate, keeping only those that pass the gate."""
         settings = ctx.settings(self.settings_model)
         sink = ctx.jsonl_sink("judged")
-        judged = kept = 0
+        judged = kept = failed = 0
         batch: list[TrainingExample] = []
 
         async def flush() -> None:
-            nonlocal judged, kept
+            nonlocal judged, kept, failed
             if not batch:
                 return
-            results = await asyncio.gather(
-                *(self._judge_one(candidate, ctx, settings) for candidate in batch)
+            results = await gather_tolerant(
+                lambda candidate: self._judge_one(candidate, ctx, settings), batch
             )
-            for scored, _verdict, accepted in results:
+            for result in results:
+                if isinstance(result, BaseException):
+                    # A candidate the judge cannot score is dropped, not the
+                    # whole batch: keeping an unjudged example would defeat the
+                    # gate, so the safe default is to leave it out and record why.
+                    failed += 1
+                    continue
+                scored, _verdict, accepted = result
                 sink.write(scored)
                 judged += 1
                 kept += int(accepted)
@@ -121,14 +133,15 @@ class Judge(Stage):
         await flush()
         sink.close()
 
-        report = {"judged": judged, "kept": kept, "rejected": judged - kept}
-        ctx.emit_json("judge_report.json", report)
+        report = {"judged": judged, "kept": kept, "rejected": judged - kept, "failed": failed}
+        ctx.emit_json("judge_report", report)
         ctx.emit_text(
-            "report.md",
+            "report",
             "# Judge\n\n"
             f"- judged: {judged}\n"
             f"- kept: {kept}\n"
             f"- rejected: {judged - kept}\n"
+            f"- unscorable (dropped): {failed}\n"
             f"- accept threshold: {settings.accept_threshold}/25\n",
         )
         return StageResult.from_context(

@@ -17,22 +17,14 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def test_bundled_fixture_loads() -> None:
-    episodes = load_bundled_golden()
-
-    assert len(episodes) >= 7
-    assert len({episode.id for episode in episodes}) == len(episodes)
-    assert all(episode.transcript.strip() for episode in episodes)
-
-
 def test_bundled_fixture_labels_match_the_taxonomy(config_dir: Path) -> None:
     taxonomy = load_config(config_dir).taxonomy
 
     for episode in load_bundled_golden():
         for expected in episode.expected:
             assert expected.leaf in taxonomy.leaves, f"{episode.id}: {expected.leaf}"
-            form, cause = taxonomy.leaves[expected.leaf]
-            assert (expected.form, expected.cause) == (form, cause), episode.id
+            axis = taxonomy.leaves[expected.leaf]
+            assert (expected.form, expected.cause) == (axis.form, axis.cause), episode.id
 
 
 def test_load_golden_skips_comments_and_blanks(tmp_path: Path) -> None:

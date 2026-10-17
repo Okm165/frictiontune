@@ -7,9 +7,9 @@ and repaired instead of being silently massaged into shape.
 
 Two JSON realities need explicit allowances, and only these:
 
-* JSON has a single number type, so an integer literal such as ``1`` is a valid
-  ``0-1`` probability. ``Probability`` keeps the range constraint while accepting
-  integral numbers.
+* JSON has a single number type. ``_to_int`` lets an integer field accept an
+  integral float (``4.0``), and ``Probability`` keeps its range while accepting
+  the integer ``1``.
 * JSON carries an enum's *value*, not its member. ``enum_by_value`` maps a
   matching value to the member so enum fields stay strict for everything else.
 """
@@ -38,10 +38,6 @@ def _to_int(value: Any) -> Any:
         return int(value)
     return value
 
-
-# JSON numbers are not typed, so an integer field accepts an integral float.
-# The counterpart of ``Probability`` for count/index/score fields.
-IntLike = Annotated[int, BeforeValidator(_to_int)]
 
 # A count or turn index: integral-float tolerant and non-negative.
 NonNegativeInt = Annotated[int, BeforeValidator(_to_int), Field(ge=0)]

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from pydantic import Field
 
 from frictiontune.config.models import RoleName
-from frictiontune.core.errors import BackendUnavailableError
+from frictiontune.core.errors import BackendUnavailableError, LlmError, StageError
 from frictiontune.core.stats import cosine
 from frictiontune.core.text import normalize_for_match, word_ngram_set
 from frictiontune.domain.dataset import SFTRecord, TrainingExample
@@ -44,6 +44,10 @@ class DecontaminateSettings(StageSettings):
     embed_batch: int = Field(default=64, ge=1)
     max_text_chars: int = 20_000
     max_train_ngrams: int = 2_000_000
+    # Bound on the contamination judge's prompt. `retrieve_k` texts of
+    # `max_text_chars` each would otherwise exceed a server slot (and the 400 is
+    # non-retryable), so the joined texts are clipped to this total.
+    max_prompt_chars: int = 12_000
 
 
 def _meta_index(
@@ -90,32 +94,49 @@ def _time_split(
     push real work into the held-out evaluation the model was meant to learn
     from. The boundary is a quantile of the *real* records only.
 
-    Records are assigned by their source episode, not one by one: a single
-    episode yields several records (recovery is one per friction event) that
-    share the episode's timestamp and context. Splitting those across the
-    boundary would train the model on the context of an episode it is evaluated
-    on, so every record of an episode falls on the same side.
+    Records are assigned by their source **session**, not one by one: every
+    episode of a session shares the user's task, tools, and context, so a record
+    of one episode is not held out from a sibling episode of the same session.
+    Splitting inside a session would train on the context of a task the model is
+    then evaluated on, and — on a single-user corpus — leave a held-out set that
+    the contamination tiers drop entirely (GAP-047). Whole sessions fall on one
+    side; a missing session falls back to the record id so nothing merges.
+
+    The held-out side is taken **from the newest session backwards** until it
+    holds about ``1 - quantile`` of the real records. Walking the groups
+    oldest-first and stopping at the boundary looks equivalent and is not: a
+    large, newest session that straddles the boundary would go wholly to *train*,
+    and the held-out set would come out empty. That is not hypothetical — the
+    first run after the good-work track landed put 9 of 32 records in one newest
+    session, the boundary fell at 25, the accumulated total reached 23 before it,
+    and every record went to train.
     """
     ordered = sorted(records, key=lambda record: (meta.get(record.id, ("", 0))[1], record.id))
     generated_records = [record for record in ordered if record.id in generated]
     real_records = [record for record in ordered if record.id not in generated]
 
-    # Group in time order; a group is one source episode. Fall back to the record
-    # id so a missing source can never merge unrelated records.
+    # Group in time order; a group is one session. Fall back to the record id so
+    # a missing session can never merge unrelated records.
     groups: dict[str, list[SFTRecord]] = {}
     for record in real_records:
-        groups.setdefault(record.source or record.id, []).append(record)
+        session = record.meta.get("session_id") or record.id
+        groups.setdefault(str(session), []).append(record)
 
-    boundary = int(quantile * len(real_records)) if real_records else 0
-    train_real: list[SFTRecord] = []
-    eval_real: list[SFTRecord] = []
-    assigned = 0
-    for group in groups.values():
-        if assigned < boundary:
-            train_real.extend(group)
-        else:
-            eval_real.extend(group)
-        assigned += len(group)
+    target_eval = len(real_records) - int(quantile * len(real_records))
+    held_out: set[str] = set()
+    held_count = 0
+    for session, group in reversed(list(groups.items())):
+        if held_count >= target_eval:
+            break
+        held_out.add(session)
+        held_count += len(group)
+    eval_real = [
+        record
+        for record in real_records
+        if str(record.meta.get("session_id") or record.id) in held_out
+    ]
+    held_ids = {record.id for record in eval_real}
+    train_real = [record for record in real_records if record.id not in held_ids]
     return [*generated_records, *train_real], eval_real
 
 
@@ -125,6 +146,45 @@ def _t2_containment(eval_norm: str, train_norms: list[str]) -> bool:
     return any(eval_norm in train or train in eval_norm for train in train_norms if train)
 
 
+def _contamination_report(
+    *,
+    total: int,
+    generated_train: int,
+    train: int,
+    surviving: int,
+    dropped: int,
+    quantile: float,
+    reasons: Mapping[str, str],
+) -> tuple[dict[str, object], str]:
+    """Build the contamination report JSON and its markdown body.
+
+    An eval set that ends up empty while real (non-generated) training records
+    exist is called out explicitly: it makes the held-out measure vacuous, and the
+    downstream ``evaluate_replay`` will refuse to run without examples.
+    """
+    eval_empty = surviving == 0 and train > generated_train
+    report: dict[str, object] = {
+        "total": total,
+        "generated_train": generated_train,
+        "train": train,
+        "eval": surviving,
+        "eval_empty": eval_empty,
+        "dropped_contaminated": dropped,
+        "time_split_quantile": quantile,
+        "reasons": dict(reasons),
+    }
+    body = (
+        "# Decontaminate\n\n"
+        f"- total: {total}\n"
+        f"- train (past): {train}\n"
+        f"- eval (future): {surviving}\n"
+        f"- dropped as contaminated: {dropped}\n"
+    )
+    if eval_empty:
+        body += "\n- **WARNING: eval set is empty** — the held-out measure is vacuous.\n"
+    return report, body
+
+
 class Decontaminate(Stage):
     """Split curated data by time and remove contaminated evaluation items."""
 
@@ -132,10 +192,13 @@ class Decontaminate(Stage):
         name="decontaminate",
         tier=Tier.A,
         requires_llm=True,
+        uses_evaluation=True,
+        prompts=["decontaminate"],
+        roles=[RoleName.JUDGE],
         lead=Lead.CORE,
         roi="High",
         justification="Without it the headline friction drop is untrustworthy.",
-        evidence=["time split + T1-T4; lucky-pass flag"],
+        evidence=["time split + T1-T4 tiers over embedding-retrieved candidates"],
         cost=CostProfile(compute="mixed", api_usd="medium", maintenance="medium"),
         inputs={"curated": "jsonl", "judged": "jsonl"},
         outputs={"train": "jsonl", "eval": "jsonl", "contamination_report": "json"},
@@ -148,15 +211,26 @@ class Decontaminate(Stage):
         eval_text: str,
         train_texts: list[str],
         ctx: StageContext,
+        settings: DecontaminateSettings,
     ) -> bool:
         role = ctx.config.role(RoleName.JUDGE)
-        verdict: ContaminationVerdict = await ctx.run.gateway.complete_structured(
-            RoleName.JUDGE,
-            role,
-            _DECON_PROMPT,
-            {"eval_text": eval_text, "train_texts": "\n\n---\n\n".join(train_texts)},
-            ContaminationVerdict,
-        )
+        try:
+            verdict: ContaminationVerdict = await ctx.run.gateway.complete_structured(
+                RoleName.JUDGE,
+                role,
+                _DECON_PROMPT,
+                {
+                    "eval_text": clip(eval_text, settings.max_prompt_chars),
+                    "train_texts": clip("\n\n---\n\n".join(train_texts), settings.max_prompt_chars),
+                },
+                ContaminationVerdict,
+            )
+        except (LlmError, StageError):
+            # A failed contamination judgement is treated as contaminated, the
+            # conservative direction: training on a leak invalidates the eval,
+            # which is worse than dropping one fair test. It must never abort the
+            # stage.
+            return True
         return verdict.contaminated
 
     async def run(self, ctx: StageContext) -> StageResult:
@@ -221,24 +295,26 @@ class Decontaminate(Stage):
             eval_sink.write(record)
         eval_sink.close()
 
-        report = {
-            "total": len(records),
-            "generated_train": sum(1 for record in train_records if record.id in generated),
-            "train": len(train_records),
-            "eval": len(surviving),
-            "dropped_contaminated": len(dropped),
-            "time_split_quantile": eval_cfg.time_split_quantile,
-            "reasons": reasons,
-        }
-        ctx.emit_json("contamination_report.json", report)
-        ctx.emit_text(
-            "report.md",
-            "# Decontaminate\n\n"
-            f"- total: {len(records)}\n"
-            f"- train (past): {len(train_records)}\n"
-            f"- eval (future): {len(surviving)}\n"
-            f"- dropped as contaminated: {len(dropped)}\n",
+        report, body = _contamination_report(
+            total=len(records),
+            generated_train=sum(1 for record in train_records if record.id in generated),
+            train=len(train_records),
+            surviving=len(surviving),
+            dropped=len(dropped),
+            quantile=eval_cfg.time_split_quantile,
+            reasons=reasons,
         )
+        # An empty evaluation set silently disables the only honest measure of
+        # whether tuning helped; downstream `evaluate_replay` will refuse to run.
+        # Surface it here, where the cause (a drop) is still visible.
+        if report["eval_empty"]:
+            ctx.logger.warning(
+                "evaluation set is empty: every held-out record was dropped as contaminated",
+                train=len(train_records),
+                dropped=len(dropped),
+            )
+        ctx.emit_json("contamination_report", report)
+        ctx.emit_text("report", body)
         return StageResult.from_context(
             ctx,
             metrics={
@@ -320,7 +396,7 @@ class Decontaminate(Stage):
                     kept.append(record)
                 continue
 
-            if await self._semantic_check(text, candidates[: settings.retrieve_k], ctx):
+            if await self._semantic_check(text, candidates[: settings.retrieve_k], ctx, settings):
                 dropped.append(record.id)
                 reasons[record.id] = "t3/t4-semantic"
                 continue

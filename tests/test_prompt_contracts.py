@@ -170,7 +170,6 @@ def test_analyst_values_match_the_analyst_prompt(config_dir: Path) -> None:
 
 
 _WORKED_AXES = re.compile(
-    r"form=(?P<form>[\w/-]+),\s*cause=(?P<cause>[\w/-]+),\s*"
     r"leaf=(?P<leaf>\w+),\s*cost=(?P<cost>[\w/-]+),\s*"
     r"resolution=(?P<resolution>[\w/-]+)"
 )
@@ -179,10 +178,10 @@ _WORKED_AXES = re.compile(
 def test_analyst_worked_example_axes_match_the_taxonomy(config_dir: Path) -> None:
     """The analyst's worked example must not contradict the injected taxonomy.
 
-    The example freezes one concrete leaf→axes pair to teach the discipline. If
-    the configured taxonomy moves that leaf's form/cause, the illustration would
-    silently disagree with the ``leaf_axes`` block in the very same prompt, so
-    the two are pinned together here.
+    The example freezes one concrete leaf with its cost and resolution to teach
+    the discipline. If the configured taxonomy stops recognising that leaf, or
+    renames a cost / resolution, the illustration would silently disagree with
+    the lists injected into the very same prompt, so the two are pinned here.
     """
     taxonomy = load_config(config_dir).taxonomy
     text = default_registry().get("friction_analyst").system
@@ -191,7 +190,6 @@ def test_analyst_worked_example_axes_match_the_taxonomy(config_dir: Path) -> Non
 
     leaf = match["leaf"]
     assert leaf in taxonomy.leaves, f"example uses unknown leaf {leaf!r}"
-    assert (match["form"], match["cause"]) == taxonomy.leaves[leaf]
     assert match["cost"] in taxonomy.costs
     assert match["resolution"] in taxonomy.resolutions
 
@@ -210,3 +208,136 @@ def test_analyst_resolution_glossary_matches_the_taxonomy(config_dir: Path) -> N
     glossary = text.split("## Resolution", 1)[1].split("##", 1)[0]
 
     assert set(_RESOLUTION_BULLET.findall(glossary)) == set(taxonomy.resolutions)
+
+
+def test_analyst_leaf_definitions_reach_the_prompt(config_dir: Path) -> None:
+    """Every configured leaf definition must be injected into the analyst prompt.
+
+    The analyst labels from the injected ``leaf_axes``; a leaf with no description
+    would be labelled from its bare name, which is how the same situation drifts
+    across labels between runs.
+    """
+    config = load_config(config_dir)
+    values = analyst_prompt_values(
+        config,
+        session_id="s",
+        episode_id="e",
+        turn_count=1,
+        tool_calls=0,
+        tool_errors=0,
+        compactions=0,
+        transcript="0 | user | hi",
+        max_chars=1000,
+    )
+    leaf_axes = values["leaf_axes"]
+    assert isinstance(leaf_axes, str)
+    for leaf, axis in config.taxonomy.leaves.items():
+        assert axis.description, f"leaf {leaf!r} has no description"
+        line = next(
+            (item for item in leaf_axes.splitlines() if item.startswith(f"- {leaf}:")), None
+        )
+        assert line is not None, f"leaf {leaf!r} missing from leaf_axes"
+        assert axis.description in line
+
+
+def _enclosing_class(tree: ast.Module, node: ast.AST) -> str | None:
+    """Name of the innermost class whose body contains ``node``, if any."""
+    best: tuple[int, str] | None = None
+    for parent in ast.walk(tree):
+        if not isinstance(parent, ast.ClassDef):
+            continue
+        if any(child is node for child in ast.walk(parent)):
+            span = (parent.end_lineno or parent.lineno) - parent.lineno
+            if best is None or span < best[0]:
+                best = (span, parent.name)
+    return best[1] if best else None
+
+
+def _prompts_used_per_stage(path: Path) -> dict[str, set[str]]:
+    """Map each class in a stage module to the prompts its call sites name."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    constants = _module_constants(tree)
+    used: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "complete_structured"
+            and len(node.args) >= 3
+        ):
+            continue
+        prompt = _resolve_str(node.args[2], constants)
+        owner = _enclosing_class(tree, node)
+        if prompt is not None and owner is not None:
+            used.setdefault(owner, set()).add(prompt)
+    return used
+
+
+def test_each_stage_declares_exactly_the_prompts_it_calls() -> None:
+    """A stage's run id is built from its declared prompts.
+
+    Declaring too few would let an edited prompt leave the stage manifest a
+    cache hit — the new prompt would never be used — so this walks the stages
+    package, pairs every structured call site with its enclosing stage class,
+    and requires the class's spec to declare exactly what its methods call.
+    """
+    import importlib
+
+    package_root = Path(frictiontune.__file__).parent / "stages"
+    checked = 0
+    for path in sorted(package_root.rglob("*.py")):
+        used = _prompts_used_per_stage(path)
+        if not used:
+            continue
+        module = importlib.import_module(f"frictiontune.stages.{path.stem}")
+        for class_name, prompts in used.items():
+            stage_cls = getattr(module, class_name, None)
+            assert stage_cls is not None, f"{path.name}: unknown class {class_name}"
+            spec = getattr(stage_cls, "spec", None)
+            assert spec is not None, f"{path.name}:{class_name} calls prompts but has no spec"
+            assert set(spec.prompts) == prompts, (
+                f"{path.name}:{class_name} declares {sorted(spec.prompts)} "
+                f"but its call sites name {sorted(prompts)}"
+            )
+            checked += 1
+
+    assert checked >= 10, "the stage-prompt guard stopped finding call sites"
+
+
+def test_each_stage_declares_whether_it_reads_the_evaluation_policy() -> None:
+    """A stage's run id includes the evaluation policy only when it declares it.
+
+    The policy block holds the time-split quantile, the contamination tiers, and
+    the replay seeds. Declaring too few stages would let a change to a
+    *measurement* knob reuse a stale artifact; declaring too many re-keys the
+    whole data phase for an experiment that touches one stage. This walks the
+    stages package for readers of ``config.evaluation`` and requires the
+    declaration to match exactly.
+    """
+    import importlib
+
+    package_root = Path(frictiontune.__file__).parent / "stages"
+    checked = 0
+    readers: set[str] = set()
+    for path in sorted(package_root.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        if "config.evaluation" not in source:
+            continue
+        module = importlib.import_module(f"frictiontune.stages.{path.stem}")
+        tree = ast.parse(source)
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            stage_cls = getattr(module, node.name, None)
+            spec = getattr(stage_cls, "spec", None)
+            if spec is None:
+                continue
+            segment = ast.get_source_segment(source, node) or ""
+            uses = "config.evaluation" in segment
+            assert spec.uses_evaluation == uses, (
+                f"{path.name}:{node.name} declares uses_evaluation={spec.uses_evaluation} "
+                f"but {'reads' if uses else 'does not read'} config.evaluation"
+            )
+            readers.add(node.name)
+            checked += 1
+    assert checked >= 3, f"the evaluation-policy guard found too few stages: {sorted(readers)}"

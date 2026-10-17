@@ -14,6 +14,8 @@ as synchronous — write an ``async def`` when the work is asynchronous.)
 from __future__ import annotations
 
 import inspect
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -47,25 +49,83 @@ RETRYABLE: tuple[type[BaseException], ...] = (
 )
 
 
+def _retry_after_seconds(exc: BaseException | None) -> float | None:
+    """Return the server's requested wait, from a ``Retry-After`` header.
+
+    A 429 is not just "try again soon": the server states how long to wait, and
+    a fixed exponential backoff that ignores it retries too early and exhausts
+    its attempts inside one rate-limit window.
+
+    Two shapes are honoured, both duck-typed so this stays dependency-free in
+    ``core``: a ``Retry-After`` header (seconds or an HTTP date) on
+    ``exc.response.headers``, and a ``retry_after`` field in the error body on
+    ``exc.body`` — some gateways (Cloudflare, seen at the Bitdeer endpoint) put
+    the delay in the JSON body only.
+    """
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        delay = _parse_retry_after(headers.get("retry-after"))
+        if delay is not None:
+            return delay
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        return _parse_retry_after(body.get("retry_after"))
+    return None
+
+
+def _parse_retry_after(raw: object) -> float | None:
+    """Parse a ``Retry-After`` value: seconds, an HTTP date, or ``None``."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    if isinstance(raw, (int, float)):
+        return max(0.0, float(raw))
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - datetime.now(UTC)).total_seconds())
+
+
 class RetryPolicy(BaseModel):
     """Declarative retry configuration shared by all callers."""
 
     model_config = ConfigDict(frozen=True)
 
-    max_attempts: int = Field(default=4, ge=1)
+    max_attempts: int = Field(default=5, ge=1)
     initial_delay_s: float = Field(default=0.5, ge=0.0)
-    max_delay_s: float = Field(default=30.0, ge=0.0)
+    max_delay_s: float = Field(default=60.0, ge=0.0)
     multiplier: float = Field(default=2.0, ge=1.0)
     jitter_s: float = Field(default=0.25, ge=0.0)
 
-    def wait(self) -> wait_exponential_jitter:
-        """Build the tenacity wait strategy for this policy."""
-        return wait_exponential_jitter(
+    def wait(self) -> Callable[[RetryCallState], float]:
+        """Build the wait strategy: exponential backoff, floored by ``Retry-After``.
+
+        The server's requested delay always wins when it is longer, because the
+        backoff exists to survive transient failures, not to overrule the party
+        that knows when it is ready to serve again.
+        """
+        exponential = wait_exponential_jitter(
             initial=self.initial_delay_s,
             max=self.max_delay_s,
             exp_base=self.multiplier,
             jitter=self.jitter_s,
         )
+
+        def strategy(retry_state: RetryCallState) -> float:
+            server_wait = _retry_after_seconds(
+                retry_state.outcome.exception() if retry_state.outcome else None
+            )
+            backoff = exponential(retry_state)
+            return max(backoff, server_wait) if server_wait is not None else backoff
+
+        return strategy
 
     @classmethod
     def immediate(cls, attempts: int) -> RetryPolicy:

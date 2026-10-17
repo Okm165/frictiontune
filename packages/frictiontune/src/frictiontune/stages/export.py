@@ -65,14 +65,26 @@ class Export(Stage):
         )
         result: ExportResult = await ctx.run.backends.serving().export(request)
         ctx.emit_json("export_result", result)
-        ctx.emit_text(
-            "report.md",
-            "# Export\n\n"
-            f"- method: {request.method}\n"
-            f"- served dir: `{result.served_dir}`\n"
-            f"- merged: {result.merged}\n"
-            f"- parity: {result.parity.matches}/{result.parity.total}\n",
-        )
+        lines = [
+            "# Export",
+            "",
+            f"- method: {request.method}",
+            f"- served dir: `{result.served_dir}`",
+            f"- merged: {result.merged}",
+            f"- parity: {result.parity.matches}/{result.parity.total}",
+        ]
+        if result.parity.mismatches:
+            # A count alone cannot be read: a merge that rounded in bf16 and a
+            # merge that is broken both show up here, and only the outputs say
+            # which one happened.
+            lines += ["", "## Probes that differed", ""]
+            for mismatch in result.parity.mismatches:
+                lines += [
+                    f"- prompt: {mismatch.prompt!r}",
+                    f"  - adapter: {mismatch.expected!r}",
+                    f"  - merged:  {mismatch.actual!r}",
+                ]
+        ctx.emit_text("report", "\n".join(lines) + "\n")
         return StageResult.from_context(
             ctx,
             metrics={

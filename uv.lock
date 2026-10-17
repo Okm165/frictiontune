@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
@@ -646,6 +646,7 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "structlog" },
@@ -680,6 +681,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
@@ -733,7 +735,7 @@ requires-dist = [
     { name = "datasets", marker = "extra == 'train'", specifier = ">=2.20" },
     { name = "frictiontune", editable = "packages/frictiontune" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "peft", marker = "extra == 'train'", specifier = ">=0.12" },
+    { name = "peft", marker = "extra == 'train'", specifier = ">=0.13" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
@@ -743,8 +745,8 @@ requires-dist = [
     { name = "torch", marker = "extra == 'train'", specifier = ">=2.3" },
     { name = "transformers", marker = "extra == 'grpo'", specifier = ">=4.43" },
     { name = "transformers", marker = "extra == 'train'", specifier = ">=4.43" },
-    { name = "trl", marker = "extra == 'grpo'", specifier = ">=0.9" },
-    { name = "trl", marker = "extra == 'train'", specifier = ">=0.9" },
+    { name = "trl", marker = "extra == 'grpo'", specifier = ">=0.14" },
+    { name = "trl", marker = "extra == 'train'", specifier = ">=0.12" },
 ]
 provides-extras = ["train", "grpo", "dev"]
 

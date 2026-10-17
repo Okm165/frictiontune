@@ -19,17 +19,47 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import yaml
+from dotenv import dotenv_values
 
 from frictiontune.config.models import RunConfig
 from frictiontune.core.errors import ConfigError
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def load_env_file(path: Path | None = None) -> Path | None:
+    """Load a ``.env`` file from the working directory upward into the process.
+
+    The documentation tells users to ``cp .env.example .env`` and then run, but
+    the loader only ever consults ``os.environ``; without this the file would be
+    silently ignored. Values are loaded with ``override=False`` semantics — a
+    variable already present in the real environment always wins, so a shell
+    export beats the file and the file never clobbers CI. A missing file is not
+    an error (the repo ships no secrets), so ``None`` is returned rather than
+    raising. The path actually used is returned so callers can log it.
+    """
+    if path is None:
+        path = _find_dotenv()
+    if path is None or not path.is_file():
+        return None
+    for key, value in dotenv_values(path).items():
+        if value is not None and key not in os.environ:
+            os.environ[key] = value
+    return path
+
+
+def _find_dotenv() -> Path | None:
+    """Find the nearest ``.env`` walking up from the current directory."""
+    current = Path.cwd().resolve()
+    for directory in (current, *current.parents):
+        candidate = directory / ".env"
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -136,6 +166,14 @@ def load_config(
     if taxonomy_path.is_file():
         tree = deep_merge(tree, {"taxonomy": load_yaml(taxonomy_path)})
 
+    # Stage defaults come before the hardware preset and the environment overlay,
+    # so an environment can tune a stage (a local 29 k-token slot needs a smaller
+    # transcript budget than a hosted 128 k-token one). The environment is the
+    # most specific layer below the CLI, so it must win.
+    stage_configs = _collect_stage_configs(config_dir)
+    if stage_configs:
+        tree = deep_merge(tree, {"stages": stage_configs})
+
     if hardware_preset:
         preset_path = config_dir / "hardware" / f"{hardware_preset}.yaml"
         tree = deep_merge(tree, {"hardware": load_yaml(preset_path)})
@@ -143,10 +181,6 @@ def load_config(
     if environment:
         env_path = config_dir / "environments" / f"{environment}.yaml"
         tree = deep_merge(tree, load_yaml(env_path))
-
-    stage_configs = _collect_stage_configs(config_dir)
-    if stage_configs:
-        tree = deep_merge(tree, {"stages": stage_configs})
 
     for extra in extra_files or []:
         tree = deep_merge(tree, load_yaml(extra))

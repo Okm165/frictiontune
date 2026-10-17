@@ -57,6 +57,8 @@ class Curate(Stage):
         name="curate",
         tier=Tier.A,
         requires_llm=True,
+        prompts=["dedup"],
+        roles=[RoleName.DEDUP],
         lead=Lead.CORE,
         roi="High",
         justification="Deduplication improves models; semantic dedup beats surface similarity.",
@@ -178,9 +180,9 @@ class Curate(Stage):
             "semantic_dropped": len(dropped),
             "kept": written,
         }
-        ctx.emit_json("curate_report.json", report)
+        ctx.emit_json("curate_report", report)
         ctx.emit_text(
-            "report.md",
+            "report",
             "# Curate\n\n"
             f"- collected (after exact dedup): {len(items)}\n"
             f"- semantic duplicates dropped: {len(dropped)}\n"

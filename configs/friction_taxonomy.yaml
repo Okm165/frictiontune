@@ -27,20 +27,68 @@ resolutions:
   - self-recovery
   - none
 
-# leaf -> [form, cause]
+# leaf -> {form, cause, description}
+# `description` is the semantic definition injected into the friction_analyst
+# prompt, so the model labels from a definition rather than guessing from the
+# leaf's name.
 leaves:
-  instruction_misread: [intent-interpretation, instruction-ambiguity]
-  scope_creep: [action-bounding, instruction-ambiguity]
-  premature_action: [action-bounding, spec]
-  failure_to_ask: [intent-interpretation, instruction-ambiguity]
-  ignored_constraint: [rule-following, instruction-ambiguity]
-  tool_misuse: [implement/execute, tool/env]
-  repeated_failing_call: [implement/execute, capability]
-  no_verification: [implement/execute, capability]
-  wrong_verification: [reporting, capability]
-  context_rot: [project-reading, context]
-  repeated_mistake: [implement/execute, context]
-  format_violation: [reporting, spec]
-  verbosity: [reporting, spec]
-  unsafe_action: [action-bounding, spec]
-  stale_state: [project-reading, context]
+  instruction_misread:
+    form: intent-interpretation
+    cause: instruction-ambiguity
+    description: The assistant misread or misapplied what the human actually asked for.
+  scope_creep:
+    form: action-bounding
+    cause: instruction-ambiguity
+    description: The assistant did more than the task called for (extra files, unrelated edits, unrequested refactors).
+  premature_action:
+    form: action-bounding
+    cause: spec
+    description: The assistant acted before it had enough information or confirmation to act safely.
+  failure_to_ask:
+    form: intent-interpretation
+    cause: instruction-ambiguity
+    description: The assistant proceeded instead of asking a clarifying question it needed to ask.
+  ignored_constraint:
+    form: rule-following
+    cause: instruction-ambiguity
+    description: The assistant violated an explicit instruction, rule, or limit the human had stated.
+  tool_misuse:
+    form: implement/execute
+    cause: tool/env
+    description: The assistant used a tool incorrectly or in a way it does not support.
+  repeated_failing_call:
+    form: implement/execute
+    cause: capability
+    description: The assistant repeated a call or action that was already failing instead of diagnosing it.
+  no_verification:
+    form: implement/execute
+    cause: capability
+    description: The assistant claimed or assumed success without checking the result.
+  wrong_verification:
+    form: reporting
+    cause: capability
+    description: The assistant verified the wrong thing, so the check gave false confidence.
+  context_rot:
+    form: project-reading
+    cause: context
+    description: The assistant lost or corrupted earlier conversation or project context it had been given.
+  repeated_mistake:
+    form: implement/execute
+    cause: context
+    description: The assistant repeated a mistake it had already made earlier in the session.
+  format_violation:
+    form: reporting
+    cause: spec
+    description: The assistant broke a required output or tool-call format.
+  verbosity:
+    form: reporting
+    cause: spec
+    description: The assistant buried the answer in needless length.
+  unsafe_action:
+    form: action-bounding
+    cause: spec
+    description: The assistant took a destructive or risky action without guardrails.
+  stale_state:
+    form: project-reading
+    cause: context
+    description: The assistant acted on its own outdated context or memory; external data merely being old is not this leaf.

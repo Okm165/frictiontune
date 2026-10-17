@@ -32,7 +32,7 @@ from frictiontune.core.errors import PromptError
 from frictiontune.core.hashing import content_hash
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Collection, Mapping
 
 _FRONT_MATTER = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 _SECTION = re.compile(r"^:::(\w+)\s*\n(.*?)^:::\s*$", re.DOTALL | re.MULTILINE)
@@ -162,18 +162,29 @@ class PromptRegistry:
         self._cache[name] = template
         return template
 
-    def fingerprint(self) -> str:
-        """Hash every prompt and partial file, so editing one changes a run id.
+    def fingerprint(self, names: Collection[str] | None = None) -> str:
+        """Hash prompt and partial contents, so editing one changes a run id.
 
         Prompts are inputs to every LLM stage, but they live in files, not config.
         Without their contents in the run id, editing a prompt would leave the
         stage manifest a cache hit and the new prompt would never be used.
+
+        ``names`` narrows the hash to the prompts a stage declares, so editing
+        ``judge.md`` re-keys the stages that call the judge and not, say,
+        ``ingest``. Each prompt's *resolved* sections are hashed alongside its
+        file text, which makes a change to a shared ``{{> partial }}`` re-key
+        exactly the prompts that include it. ``None`` hashes every prompt — the
+        conservative default for a stage that declares none.
         """
+        selected = self.names() if names is None else sorted(set(names))
         prompts = {
-            name: self._dir.joinpath(f"{name}.md").read_text(encoding="utf-8")
-            for name in self.names()
+            name: {
+                "source": self._dir.joinpath(f"{name}.md").read_text(encoding="utf-8"),
+                "resolved": self.get(name).sections,
+            }
+            for name in selected
         }
-        return content_hash({"partials": self.partials(), "prompts": prompts})
+        return content_hash({"prompts": prompts})
 
 
 @lru_cache(maxsize=1)

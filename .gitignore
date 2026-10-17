@@ -24,6 +24,10 @@ coverage.xml
 # frictiontune runtime output — this is evidence, but it is local and large.
 artifacts/
 .cache/
+.context/
+journal/
+# Local model weights (e.g. a Qwen GGUF for the container `llm` image).
+.toolchain/
 
 # Environment and secrets — never commit these.
 .env

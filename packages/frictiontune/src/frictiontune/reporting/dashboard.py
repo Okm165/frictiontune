@@ -50,7 +50,10 @@ class ReplayDashboard(BaseModel):
     friction_drop: float = 0.0
     friction_drop_ci_low: float = 0.0
     friction_drop_ci_high: float = 0.0
-    lucky_pass_rate: float = 0.0
+    # None when no lucky-pass measurement was produced (the core replay cannot
+    # compute it; only the gated user-simulation extension can). It is omitted
+    # rather than fabricated as 0.0, which would read as a real measurement.
+    lucky_pass_rate: float | None = None
     notes: list[str] = Field(default_factory=list)
 
     def signal(self, name: str) -> Signal | None:
@@ -121,7 +124,7 @@ def build_dashboard(
     *,
     episodes: int,
     seeds: Sequence[int],
-    lucky_pass_rate: float = 0.0,
+    lucky_pass_rate: float | None = None,
     notes: Sequence[str] = (),
 ) -> ReplayDashboard:
     """Assemble a dashboard and derive the headline friction drop.

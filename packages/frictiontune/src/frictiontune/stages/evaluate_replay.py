@@ -15,7 +15,7 @@ from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.errors import ConfigError, StageError
 from frictiontune.core.json import json_block_validity
 from frictiontune.domain.dataset import SFTRecord, TrainingExample
-from frictiontune.domain.responses import JudgeVerdict
+from frictiontune.domain.responses import ReplayVerdict
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 from frictiontune.reporting.dashboard import Direction, build_dashboard, make_signal
@@ -26,9 +26,10 @@ from frictiontune.stages.common import clip, render_transcript
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from frictiontune.llm.messages import ChatMessage
     from frictiontune.pipeline.context import StageContext
 
-_JUDGE_PROMPT = "judge"
+_JUDGE_PROMPT = "replay_judge"
 
 _SIGNALS: tuple[tuple[str, Direction], ...] = (
     ("friction_avoidance", "higher_better"),
@@ -49,6 +50,27 @@ class EvaluateReplaySettings(StageSettings):
     max_tokens: int = 1_024
 
 
+def _read_contamination(ctx: StageContext) -> tuple[int, int] | None:
+    """Read ``(held_out, dropped)`` from the contamination report, if present.
+
+    ``held_out`` is what the time split put on the evaluation side and
+    ``dropped`` is how many of those the contamination tiers then removed — the
+    two numbers that tell an empty holdout apart from a leaky one. Returns
+    ``None`` when the report is unavailable, so the caller can say it does not
+    know rather than assert a cause it has not checked.
+    """
+    if not ctx.catalog.has("contamination_report"):
+        return None
+    report = ctx.catalog.read_json("contamination_report")
+    if not isinstance(report, dict):
+        return None
+    held_out = report.get("eval")
+    dropped = report.get("dropped_contaminated")
+    if isinstance(held_out, int) and isinstance(dropped, int):
+        return held_out, dropped
+    return None
+
+
 def _format_valid(text: str) -> float:
     """Structural validity of any JSON the continuation chose to emit.
 
@@ -59,6 +81,25 @@ def _format_valid(text: str) -> float:
     if not text.strip():
         return 0.0
     return json_block_validity(text)
+
+
+def _trim_context(messages: Sequence[ChatMessage], max_chars: int) -> list[ChatMessage]:
+    """Keep the most recent messages within ``max_chars`` (the served model's window).
+
+    The replay sends a held-out episode's context to the base and adapter servers;
+    an episode longer than the served context would make every generation fail, so
+    the tail (the part closest to the continuation) is kept and the oldest turns
+    are dropped.
+    """
+    kept: list[ChatMessage] = []
+    size = 0
+    for message in reversed(messages):
+        if kept and size + len(message.content) > max_chars:
+            break
+        kept.append(message)
+        size += len(message.content)
+    kept.reverse()
+    return kept
 
 
 def _replay_notes(
@@ -88,12 +129,17 @@ class EvaluateReplay(Stage):
         name="evaluate_replay",
         tier=Tier.A,
         requires_llm=True,
+        uses_evaluation=True,
+        prompts=["replay_judge"],
+        roles=[RoleName.TARGET, RoleName.ADAPTER, RoleName.JUDGE],
         lead=Lead.CORE,
         roi="High",
         justification="The finish line: the friction drop is only credible from a clean replay.",
         evidence=["multi-signal dashboard; seeded bootstrap CI"],
         cost=CostProfile(compute="mixed", api_usd="high", maintenance="medium"),
         inputs={"eval": "jsonl", "judged": "jsonl", "adapter": "json"},
+        # Read only to explain an empty holdout accurately; consumed when present.
+        optional_inputs={"contamination_report": "json"},
         outputs={"dashboard": "json", "replay": "jsonl"},
         kill_criterion="Stop the project if the friction drop is within the interval.",
     )
@@ -133,10 +179,14 @@ class EvaluateReplay(Stage):
         role: RoleName,
         config: LlmRoleConfig,
         ctx: StageContext,
+        settings: EvaluateReplaySettings,
         *,
         seed: int,
     ) -> str:
-        messages = to_chat_messages(example.context, include_reasoning=False)
+        messages = _trim_context(
+            to_chat_messages(example.context, include_reasoning=False),
+            settings.max_context_chars,
+        )
         response = await ctx.run.gateway.complete_text(role, config, messages, seed=seed)
         return response.text
 
@@ -146,7 +196,7 @@ class EvaluateReplay(Stage):
         continuation: str,
         ctx: StageContext,
         settings: EvaluateReplaySettings,
-    ) -> JudgeVerdict:
+    ) -> ReplayVerdict:
         try:
             role = ctx.config.role(RoleName.JUDGE)
         except ConfigError as exc:
@@ -159,13 +209,10 @@ class EvaluateReplay(Stage):
             role,
             _JUDGE_PROMPT,
             {
-                "candidate_id": f"{example.id}:replay",
-                "source": example.source,
-                "track": "replay",
                 "context": clip(render_transcript(example.context), settings.max_context_chars),
-                "completion": clip(continuation, settings.max_generation_chars),
+                "continuation": clip(continuation, settings.max_generation_chars),
             },
-            JudgeVerdict,
+            ReplayVerdict,
         )
 
     async def _replay_one(
@@ -183,7 +230,7 @@ class EvaluateReplay(Stage):
                 ("base", RoleName.TARGET, base_role),
                 ("adapter", RoleName.ADAPTER, adapter_role),
             ):
-                continuation = await self._generate(example, role, config, ctx, seed=seed)
+                continuation = await self._generate(example, role, config, ctx, settings, seed=seed)
                 verdict = await self._judge(example, continuation, ctx, settings)
                 totals[side]["friction_avoidance"] += verdict.friction_avoidance
                 totals[side]["correctness"] += verdict.correctness
@@ -195,6 +242,46 @@ class EvaluateReplay(Stage):
             side: {name: value / count for name, value in totals[side].items()}
             for side in ("base", "adapter")
         }
+
+    def _skip_empty_holdout(self, ctx: StageContext, seeds: Sequence[int]) -> StageResult:
+        """Report a skipped replay when the held-out set is empty.
+
+        A strict time split can legitimately leave nothing to evaluate: on a
+        single-user corpus the newest work usually continues the same task as the
+        training data, so the contamination tiers can drop every held-out item as
+        a leak and the eval number becomes vacuous (GAP-047). That is a property
+        of the *corpus*, not a broken stage, and `export` only needs the adapter —
+        so raising here would block a downstream stage for a reason the operator
+        cannot act on at this point. The replay is therefore skipped with an
+        explicit, well-formed empty dashboard and a note naming the cause.
+
+        The note must not guess the cause. A split can also come out empty on its
+        own — a large newest session straddling the boundary once sent every
+        record to train — and blaming contamination then sends the reader to a
+        report that says `dropped_contaminated: 0`.
+        """
+        contamination = _read_contamination(ctx)
+        if contamination is None or contamination[0] == 0:
+            cause = (
+                "the time split put every curated record on the training side "
+                "(see decontaminate's report and contamination_report)"
+            )
+        else:
+            cause = (
+                f"the time split held out {contamination[0]} record(s) and all of "
+                f"them were then dropped as training leaks "
+                f"(see decontaminate's contamination_report)"
+            )
+        note = f"held-out set is empty: {cause}. The adapter is exported without a replay number."
+        dashboard = build_dashboard([], episodes=0, seeds=list(seeds), notes=[note])
+        ctx.emit_json("dashboard", dashboard)
+        ctx.emit_jsonl("replay", [])
+        ctx.emit_text("report", render_dashboard(dashboard))
+        return StageResult.from_context(
+            ctx,
+            metrics={"episodes": 0.0, "skipped": 1.0},
+            notes=[note],
+        )
 
     async def run(self, ctx: StageContext) -> StageResult:
         """Replay eval examples and emit the dashboard."""
@@ -211,7 +298,7 @@ class EvaluateReplay(Stage):
         if settings.max_examples:
             examples = examples[: settings.max_examples]
         if not examples:
-            raise StageError("evaluate_replay", "no eval examples available")
+            return self._skip_empty_holdout(ctx, sampling_seeds)
 
         results = await asyncio.gather(
             *(self._replay_one(example, ctx, settings, sampling_seeds) for example in examples)
@@ -234,7 +321,6 @@ class EvaluateReplay(Stage):
             signals,
             episodes=len(examples),
             seeds=list(sampling_seeds),
-            lucky_pass_rate=0.0,
             notes=_replay_notes(settings, seeds, sampling_seeds),
         )
         ctx.emit_json("dashboard", dashboard)
@@ -245,7 +331,7 @@ class EvaluateReplay(Stage):
                 for example, entry in zip(examples, results, strict=True)
             ],
         )
-        ctx.emit_text("report.md", render_dashboard(dashboard))
+        ctx.emit_text("report", render_dashboard(dashboard))
         return StageResult.from_context(
             ctx,
             metrics={

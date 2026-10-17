@@ -1,0 +1,80 @@
+# Local llama.cpp environment. Select with `--environment local`.
+#
+# The fully-local counterpart to the hosted `bitdeer` overlay: every judgement,
+# generation, and compaction role runs against a local llama.cpp server (the
+# container `llm` image, layer-split across the GPUs). Nothing in the data phase
+# touches a hosted endpoint, so the GPUs — not a rate limiter — set the pace.
+#
+# Point the roles at the server with:
+#
+#   FRICTIONTUNE_LOCAL_LLM_BASE_URL=http://127.0.0.1:8000/v1
+#   FRICTIONTUNE_LOCAL_LLM_MODEL=qwen3-8b
+#
+# `FRICTIONTUNE_LOCAL_LLM_CONCURRENCY` must match the server's `--parallel` slot
+# count. `ft_pod.sh` sets both from `FT_LLM_PARALLEL` (default 16), so the client
+# never over-subscribes the slots; the standalone default here is 8.
+# Grammar-constrained decoding (`response_format: json_schema`) makes every
+# structured reply valid by construction, so the repair loop is only a safety net
+# and the retry budget is
+# small — the endpoint is on the same host, not a flaky gateway.
+llm:
+  router: &local_gpu
+    base_url: ${FRICTIONTUNE_LOCAL_LLM_BASE_URL:-http://127.0.0.1:8000/v1}
+    model: ${FRICTIONTUNE_LOCAL_LLM_MODEL:-qwen3-8b}
+    api_key_env: FRICTIONTUNE_LOCAL_LLM_API_KEY
+    concurrency: ${FRICTIONTUNE_LOCAL_LLM_CONCURRENCY:-8}
+    timeout_s: 900.0
+    response_format: json_schema
+    retry:
+      max_attempts: 3
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
+
+  compactor: *local_gpu
+  schema_inferer: *local_gpu
+  friction_analyst: *local_gpu
+  recovery_finder: *local_gpu
+  harvester: *local_gpu
+  attributor: *local_gpu
+  rule_compiler: *local_gpu
+  rule_verifier: *local_gpu
+  judge: *local_gpu
+  dedup: *local_gpu
+  teacher: *local_gpu
+  user_simulator: *local_gpu
+
+# The local llama.cpp slot is ctx ÷ replicas ÷ slots ≈ 29 k tokens, and this
+# corpus is code-heavy (~3 chars/token), so a 100 k-char transcript is ~33 k
+# tokens — over the slot, and a server 400 is non-retryable, so it aborts the
+# stage. Bound every transcript-bearing prompt to the local slot. The hosted
+# overlay keeps the larger defaults (a 128 k-token context can hold them).
+stages:
+  # Compaction is the pipeline's dominant cost — one LLM call per tool output
+  # over the threshold, and 40% of outputs clear 4 000 chars — so the threshold
+  # has to be derived from the budget it serves rather than fixed globally. It
+  # exists to keep a transcript inside `max_transcript_chars`; an output that
+  # occupies 8% of that budget cannot be what breaks it, while one that occupies
+  # a quarter of it can. 12 000 is a quarter of the 50 000-char transcript
+  # budget below, and on the measured corpus it cuts compaction calls by 63%
+  # (7 357 qualifying outputs -> 2 726 of 18 340).
+  normalize:
+    compact_threshold_chars: 12000
+  friction_detect:
+    max_transcript_chars: 50000
+  segment:
+    max_phase_transcript_chars: 40000
+  mine:
+    max_transcript_chars: 50000
+  compile_rules:
+    max_transcript_chars: 50000
+  verify_rules:
+    max_transcript_chars: 50000
+  judge:
+    max_context_chars: 40000
+    max_completion_chars: 16000
+  decontaminate:
+    max_prompt_chars: 10000
+  evaluate_replay:
+    max_context_chars: 40000
+    max_generation_chars: 16000

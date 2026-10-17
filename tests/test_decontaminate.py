@@ -2,18 +2,19 @@
 
 Generated (synthetic) examples now flow into the curated pool. They must always
 train and never be held out, and they must not move the real-work time boundary.
-Records are grouped by source episode, so an episode never straddles the split.
+Records are grouped by source session, so a session never straddles the split.
 """
 
 from __future__ import annotations
 
 from frictiontune.domain.dataset import SFTRecord
-from frictiontune.stages.decontaminate import _time_split
+from frictiontune.stages.decontaminate import _contamination_report, _time_split
 
 
-def _record(identifier: str, source: str | None = None) -> SFTRecord:
+def _record(identifier: str, source: str | None = None, session: str | None = None) -> SFTRecord:
     # By default each record is its own episode, mirroring one record per episode.
-    return SFTRecord(id=identifier, source=source or identifier, track="recovery")
+    meta = {"session_id": session} if session else {}
+    return SFTRecord(id=identifier, source=source or identifier, track="recovery", meta=meta)
 
 
 def test_generated_examples_train_and_do_not_move_the_boundary() -> None:
@@ -57,13 +58,13 @@ def test_split_is_deterministic_for_equal_timestamps() -> None:
     assert [record.id for record in evaluation] == ["b", "c"]
 
 
-def test_an_episode_is_never_split_across_the_boundary() -> None:
-    # Episode "e1" yields two records (one per friction event) at the same time.
-    # A record-level split would train on e1_a and evaluate on e1_b, leaking the
-    # episode's context into training.
+def test_a_session_is_never_split_across_the_boundary() -> None:
+    # Session "ses1" yields two records from *different episodes* at the same
+    # time. A record- or episode-level split would train on one and evaluate on
+    # the other, leaking the session's task and context into training.
     records = [
-        _record("e1_a", "e1"),
-        _record("e1_b", "e1"),
+        _record("e1_a", "ses1:msg1", session="ses1"),
+        _record("e1_b", "ses1:msg2", session="ses1"),
         _record("x0"),
         _record("x1"),
         _record("x2"),
@@ -82,3 +83,80 @@ def test_an_episode_is_never_split_across_the_boundary() -> None:
 
     assert [record.id for record in train] == ["e1_a", "e1_b", "x0"]
     assert [record.id for record in evaluation] == ["x1", "x2", "x3"]
+
+
+def test_report_flags_an_empty_eval_set_when_training_records_exist() -> None:
+    report, body = _contamination_report(
+        total=5,
+        generated_train=0,
+        train=5,
+        surviving=0,
+        dropped=5,
+        quantile=0.8,
+        reasons={"x": "t3/t4-semantic"},
+    )
+
+    assert report["eval_empty"] is True
+    assert report["eval"] == 0
+    assert "WARNING" in body
+
+
+def test_report_does_not_flag_a_populated_eval_set() -> None:
+    report, body = _contamination_report(
+        total=5,
+        generated_train=0,
+        train=4,
+        surviving=1,
+        dropped=0,
+        quantile=0.8,
+        reasons={},
+    )
+
+    assert report["eval_empty"] is False
+    assert "WARNING" not in body
+
+
+def test_report_does_not_flag_an_all_generated_pool() -> None:
+    # No real training records means there is nothing to hold out, so an empty
+    # eval side is expected and must not read as a failure.
+    report, _body = _contamination_report(
+        total=2,
+        generated_train=2,
+        train=2,
+        surviving=0,
+        dropped=0,
+        quantile=0.8,
+        reasons={},
+    )
+
+    assert report["eval_empty"] is False
+
+
+def test_a_large_newest_session_does_not_swallow_the_held_out_share() -> None:
+    # The shape that produced an empty eval set on the real corpus: 32 records,
+    # 18 sessions, and 9 of them in one newest session. Walking the groups
+    # oldest-first and stopping at the boundary sent the straddling group wholly
+    # to *train* (23 accumulated + 9 = 32), so nothing was held out and the
+    # replay had no number to report.
+    records = [_record(f"old{index}", session=f"ses_old{index}") for index in range(23)]
+    records += [_record(f"new{index}", session="ses_new") for index in range(9)]
+    meta = {f"old{index}": ("text", index) for index in range(23)}
+    meta.update({f"new{index}": ("text", 100) for index in range(9)})
+
+    train, evaluation = _time_split(records, meta, set(), 0.8)
+
+    assert {record.id for record in evaluation} == {f"new{index}" for index in range(9)}
+    assert len(train) == 23
+
+
+def test_a_single_session_pool_still_holds_something_out() -> None:
+    # One session means one group, and the group is bigger than the held-out
+    # share. It must still be held out: an empty eval set is never the better
+    # answer when there is real work to measure on.
+    records = [_record(f"r{index}", session="ses1") for index in range(5)]
+    meta = {f"r{index}": ("text", index) for index in range(5)}
+
+    train, evaluation = _time_split(records, meta, set(), 0.8)
+
+    assert len(evaluation) == 5
+    assert train == []

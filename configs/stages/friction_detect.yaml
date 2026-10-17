@@ -1,6 +1,9 @@
 # friction_detect: route then analyse; ensemble>1 needs a non-zero analyst temp.
 router_enabled: true
-ensemble: 2
+# A 2-of-3 majority is markedly more stable than 2-of-2: a strict two-pass vote
+# drops a real event as soon as the two samples disagree (observed 18 vs 13
+# events on identical input), while a majority survives one dissenting sample.
+ensemble: 3
 batch_size: 32
 max_transcript_chars: 100000
 taxonomy_enforcement: true

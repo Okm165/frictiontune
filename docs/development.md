@@ -8,6 +8,8 @@ How to work on `frictiontune` itself.
 frictiontune/
 ├── pyproject.toml              # uv workspace root (virtual) + shared tool config
 ├── configs/                    # layered configuration (no machine specifics)
+├── container/                  # Containerfile cascade + pod spec (one image per pipeline)
+├── scripts/                    # ops tooling: pod runner, log registry, anomaly analysis
 ├── docs/
 ├── packages/
 │   ├── frictiontune/           # light data pipeline + CLI
@@ -166,6 +168,72 @@ Implement one of the protocols in `frictiontune.backends.protocols`
 `frictiontune_train/plugin.py:register`. Import the heavy stack **inside** the
 method, not at module scope, so `import frictiontune_train` stays light. Use
 `frictiontune_train.lazy.require` for actionable errors.
+
+## Containers and operations
+
+The pipeline runs as containers built from one cascading `container/Containerfile`
+(one image per pipeline: `data`, `train`, `serve`, `llm`, `dev`). The image owns
+the toolchain; the repository is bind-mounted at `/work` and its `packages/*/src`
+shadow the baked install, so code stays live and `code_revision()` sees the same
+tree a host run would — the same `run_id`, the same artifact cache. See
+[`container/README.md`](../container/README.md) for the build args, the pod
+layout, and the local llama.cpp recipe.
+
+Every run is registered and analysed:
+
+```bash
+python3 scripts/ops/log_registry.py backfill      # register journal/partial/*.txt
+python3 scripts/ops/log_registry.py show --pipeline v10
+python3 scripts/ops/analyze.py --root journal/runs # anomalies.json, ANALYSIS.md, gaps.md
+```
+
+`scripts/ops/ft_pod.sh` runs the pipeline in a podman *pod* with the replay
+servers and the monitor sidecar. Because the GPU workloads do not fit on the
+machine at once, it runs in **phases**, each handing the hardware to that phase's
+bottleneck:
+
+| command | stages | GPU layout |
+| --- | --- | --- |
+| `ft_pod.sh data` | `decontaminate`, `verify_rules` (every LLM stage) | local llama.cpp on **all** GPUs |
+| `ft_pod.sh train` | `train_sft` | **DDP across all cards**, servers evicted |
+| `ft_pod.sh replay` | `evaluate_replay`, `export` | base, adapter, and (local) judge on separate cards |
+| `ft_pod.sh all` | all three, in order | — |
+
+All phases pass identical run flags, so they resolve the same `run_id` and later
+phases skip earlier phases' work. With `FT_LOCAL_LLM=1` the data phase serves the
+`analyst`/`judge`/`teacher`/`compactor` roles from a local llama.cpp server and the
+`local` environment overlay raises role concurrency to match. By default that is a
+single process layer-split across every card (`CTX` is the total context, divided
+across `--parallel` slots). Set `FT_LLM_SERVERS=N` to run `N` data-parallel
+replicas instead — one model per card, each on its own port, with the context and
+slot budget split evenly so the per-slot window is unchanged. The client
+round-robins across the replica list; no proxy is involved. Use replicas when the
+model fits a card (an 8B at Q4 does), layer-split when it does not. See
+[`container/README.md`](../container/README.md) for the full recipe.
+
+## Hardware generality
+
+The project is designed to run on **any** GPU box, not just the one it was
+developed on. Three layers cooperate, and all three are driven by the hardware
+preset (`configs/hardware/<name>.yaml`, selected with `--hardware`):
+
+* **Vendor.** The container cascade builds for AMD (ROCm) or NVIDIA (CUDA) by
+  swapping three build args (`make -C container all VARIANT=cuda`). At run time
+  `ft_pod.sh` detects the accelerator and passes the right podman device grants
+  and per-card pin env. Force it with `FT_ACCELERATOR=amd|nvidia`.
+* **Card count.** `hardware.devices` is the single source of the DDP topology:
+  `devices: 3` → a 3-rank `torch.distributed.run`; `devices: 1` → a single pinned
+  process. `"auto"` resolves from the *visible* devices. Never hardcode a count.
+* **Budget.** `hardware.per_device_batch`, `hardware.grad_accum` (per card under
+  DDP) and `hardware.max_seq_len` size both training and llama.cpp; the preset is
+  the only place the budget is declared. The derived `--tensor-split` in
+  `ft_pod.sh` is computed from the detected card count, not written by hand.
+
+Add a preset to support a new box; do not add conditionals to stage code. The
+`cloud-h100x4`, `mi300x-192g`, `3x24g`, `2x24g` and `1x24g` presets are the
+worked examples, and
+[`configs/hardware/README.md`](../configs/hardware/README.md) is the authoring
+guide.
 
 ## The rules of the codebase
 

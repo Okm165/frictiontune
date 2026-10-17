@@ -1,7 +1,6 @@
 # A single MI300X with 192 GB HBM3: room for long contexts.
 devices: 1
 quant: nf4
-offload: none
 per_device_batch: 2
 grad_accum: 8
 max_seq_len: 16384

@@ -1,7 +1,6 @@
 # Four H100s in the cloud: the fastest preset, longest context.
 devices: 4
 quant: nf4
-offload: none
 per_device_batch: 2
 grad_accum: 4
 max_seq_len: 16384

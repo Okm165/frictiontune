@@ -1,0 +1,19 @@
+# The "any box" preset: a machine you have not pinned down yet.
+#
+# It is deliberately identical to passing *no* `--hardware` at all — one training
+# rank per visible accelerator, the conservative single-card budget, and an 8k
+# window. It is named so it shows up in `configs/hardware/`, can be selected
+# explicitly (`--hardware generic`), and can be overridden field by field with
+# `--set hardware.<field>=<value>` before you commit to a preset.
+#
+# Start here, measure, then author a preset for your box (see README.md) and
+# switch to it for anything repeatable: `devices: auto` makes the topology depend
+# on what happens to be visible, which is the right default for a first run and
+# the wrong one for a benchmark.
+devices: auto
+quant: nf4
+per_device_batch: 1
+grad_accum: 8
+max_seq_len: 8192
+gradient_checkpointing: true
+dtype: bf16

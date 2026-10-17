@@ -207,7 +207,11 @@ async def evaluate_golden(
         except FrictionTuneError as exc:
             outcomes.append(EpisodeOutcome(episode.id, error=str(exc)))
             continue
-        predicted = {event.leaf: (event.form, event.cause) for event in analysis.events}
+        leaves = config.taxonomy.leaves
+        predicted: dict[str, tuple[str, str]] = {}
+        for event in analysis.events:
+            axis = leaves.get(event.leaf)
+            predicted[event.leaf] = (axis.form, axis.cause) if axis else ("unknown", "unknown")
         expected = {event.leaf: (event.form, event.cause) for event in episode.expected}
         outcomes.append(
             EpisodeOutcome(

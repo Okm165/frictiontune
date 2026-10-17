@@ -1,9 +1,26 @@
 # Three 24 GB cards over PCIe: no NVLink assumed, so keep accumulation high.
+# Training runs one torchrun rank per device (see frictiontune_train.distributed),
+# so `grad_accum` is *per card*: 3 ranks × 1 batch × 4 = 12 effective.
 devices: 3
 quant: nf4
-offload: none
 per_device_batch: 1
-grad_accum: 12
+grad_accum: 4
+# The window has to fit one card, and this preset used to claim 16k did. The
+# first real training run measured the opposite: at 16384 tokens a 4-bit 8B model
+# with gradient checkpointing and batch 1 allocated 22.11 GiB and then failed to
+# find another 768 MiB for the backward recompute of an MLP block
+# (`up_proj(x)` at 16384 tokens is 16384 × 12288 × 2 B = 384 MiB, and PEFT's
+# bnb LoRA clones the product, so the block peaks around 1.5 GiB on its own).
+# The two window-proportional terms dominate: the vocabulary-wide logits
+# (16384 × 151936 × 2 B ≈ 5 GiB) and the checkpointed block inputs
+# (36 × 16384 × 4096 × 2 B ≈ 4.6 GiB). 8192 halves both and leaves several GiB
+# of headroom. Raise it only with a measurement on your own box:
+#
+#   uv run frictiontune run --stage train_sft --include-deps --set hardware.max_seq_len=12288
+#
+# Note that a smaller window does *not* drop the part we train on: the SFT
+# collator keeps the **last** `max_seq_len` tokens of a record, and the trained
+# completion sits at the end of every example. What shrinks is masked context.
 max_seq_len: 8192
 gradient_checkpointing: true
 dtype: bf16

@@ -45,6 +45,7 @@ def test_build_record_flags_a_reasoning_only_completion_as_zero_supervision() ->
         FallbackTokenizer(),
         settings=BuildSftSettings(allow_fallback_tokenizer=True),
         tokenizer_kind="fallback",
+        max_seq_len=8192,
     )
 
     assert trained == 0

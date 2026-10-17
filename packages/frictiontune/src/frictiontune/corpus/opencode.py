@@ -61,6 +61,38 @@ def _epoch(value: Any) -> int:
     return 0
 
 
+def _model_id(value: Any) -> str | None:
+    """Return a model/agent id from a stored value or its JSON string.
+
+    Sessions and assistant turns both store their model as a JSON object
+    (``{"id": ...}``) or a bare id; normalizing to the id here keeps
+    ``Session.model`` and ``Message.model`` consistent (GAP-004).
+    """
+    if isinstance(value, str):
+        decoded = try_loads(value)
+        if isinstance(decoded, dict):
+            identifier = decoded.get("id")
+            return str(identifier) if identifier else None
+        return value or None
+    if isinstance(value, dict):
+        identifier = value.get("id")
+        return str(identifier) if identifier else None
+    return None
+
+
+def _switch_text(kind: str, data: dict[str, Any]) -> str:
+    """Human-readable note for an ``agent-switched``/``model-switched`` event.
+
+    These rows were previously dropped without a trace (GAP-004); a mid-session
+    switch is real context, so it is rendered as a plain system note rather than
+    discarded.
+    """
+    label = "model" if kind == "model-switched" else "agent"
+    current = _model_id(data.get("model") or data.get("agent")) or "unknown"
+    previous = _model_id(data.get("previous")) or "unknown"
+    return f"[{label} switched: {previous} -> {current}]"
+
+
 def _open(db_path: Path, params: str) -> sqlite3.Connection:
     """Open a read-only connection that forces SQLite to touch the file now."""
     connection = sqlite3.connect(f"file:{db_path}?{params}", uri=True)
@@ -74,19 +106,25 @@ def _open(db_path: Path, params: str) -> sqlite3.Connection:
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
-    """Open the corpus read-only against a possibly-live writer.
+    """Open the corpus read-only without disturbing a live writer.
 
-    ``immutable=1`` tells SQLite the file never changes, so it skips locking and
-    ignores the write-ahead log: against a live session that silently reads stale
-    or torn data. Normal read-only mode plus a busy timeout is safe for a
-    concurrently-written WAL database. Only if read-only opening is impossible
-    (e.g. a read-only filesystem with no shared-memory file) does it fall back to
-    an immutable snapshot, preferring slightly stale data over a hard failure.
+    A database with a sidecar write-ahead log is being actively written and must
+    be opened ``mode=ro`` so SQLite replays the WAL: ``immutable=1`` would
+    silently ignore it and hide the newest rows. A database with no WAL is at
+    rest, so it is opened ``immutable=1`` first — that touches no ``-shm``/``-wal``
+    file next to the source (the point of GAP-011) — and only falls back to
+    ``mode=ro`` if the immutable open is impossible. Both modes are attempted
+    either way, so a read-only filesystem degrades rather than fails.
     """
-    try:
-        return _open(db_path, "mode=ro")
-    except sqlite3.OperationalError:
-        return _open(db_path, "mode=ro&immutable=1")
+    live = db_path.with_name(db_path.name + "-wal").exists()
+    modes = ("mode=ro", "mode=ro&immutable=1") if live else ("mode=ro&immutable=1", "mode=ro")
+    error: sqlite3.OperationalError | None = None
+    for params in modes:
+        try:
+            return _open(db_path, params)
+        except sqlite3.OperationalError as exc:
+            error = exc
+    raise sqlite3.OperationalError(f"could not open corpus {db_path}: {error}")
 
 
 def _content_text(content: Any) -> str:
@@ -201,8 +239,7 @@ def _message_from_row(row: sqlite3.Row, index: int) -> tuple[Message, int, int] 
 
     if kind == "assistant":
         parts, tool_calls, tool_errors = _parse_assistant_parts(data.get("content"))
-        model = data.get("model")
-        model_id = model.get("id") if isinstance(model, dict) else None
+        model_id = _model_id(data.get("model"))
         message = Message(
             id=str(row["id"]),
             session_id=session_id,
@@ -212,7 +249,6 @@ def _message_from_row(row: sqlite3.Row, index: int) -> tuple[Message, int, int] 
             parts=parts,
             agent=str(data.get("agent") or "") or None,
             model=str(model_id) if model_id else None,
-            raw=data,
         )
         return message, tool_calls, tool_errors
 
@@ -224,7 +260,6 @@ def _message_from_row(row: sqlite3.Row, index: int) -> tuple[Message, int, int] 
             role="user",
             time_created=time_created,
             parts=_parse_user_parts(data),
-            raw=data,
         )
         return message, 0, 0
 
@@ -240,7 +275,6 @@ def _message_from_row(row: sqlite3.Row, index: int) -> tuple[Message, int, int] 
             role="system",
             time_created=time_created,
             parts=[CompactionPart(text=str(summary))],
-            raw=data,
         )
         return message, 0, 0
 
@@ -252,7 +286,6 @@ def _message_from_row(row: sqlite3.Row, index: int) -> tuple[Message, int, int] 
             role="system",
             time_created=time_created,
             parts=[IdlePart()],
-            raw=data,
         )
         return message, 0, 0
 
@@ -264,7 +297,17 @@ def _message_from_row(row: sqlite3.Row, index: int) -> tuple[Message, int, int] 
             role="system",
             time_created=time_created,
             parts=[SystemPart(text=str(data.get("text") or ""))],
-            raw=data,
+        )
+        return message, 0, 0
+
+    if kind in {"model-switched", "agent-switched"}:
+        message = Message(
+            id=str(row["id"]),
+            session_id=session_id,
+            seq=index,
+            role="system",
+            time_created=time_created,
+            parts=[SystemPart(text=_switch_text(kind, data))],
         )
         return message, 0, 0
 
@@ -291,7 +334,7 @@ class OpenCodeCorpus:
                 session = Session(
                     id=session_id,
                     project=str(session_row["project_id"]) if "project_id" in columns else None,
-                    model=str(session_row["model"])
+                    model=_model_id(session_row["model"])
                     if "model" in columns and session_row["model"]
                     else None,
                     agent=None,

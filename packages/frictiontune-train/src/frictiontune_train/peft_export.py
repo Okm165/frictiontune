@@ -13,20 +13,33 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from frictiontune.backends.models import ExportRequest, ExportResult, ParityResult
+from frictiontune.backends.models import ExportRequest, ExportResult, ParityMismatch, ParityResult
 from frictiontune.config.models import HardwareConfig
 
 from frictiontune_train.lazy import require, torch_hint
 from frictiontune_train.loaders import load_tokenizer, load_transformers_base
 
+# How many tokens the parity probes generate; see `_generate`.
+_PARITY_TOKENS = 8
+
 
 def full_precision_hardware() -> HardwareConfig:
     """Hardware settings for loading a base model to merge in full precision."""
-    return HardwareConfig(quant="none", offload="none", dtype="bf16")
+    return HardwareConfig(quant="none", dtype="bf16")
 
 
-def _generate(model: Any, tokenizer: Any, prompt: str, max_new_tokens: int = 64) -> str:
-    """Greedy-generate a single completion for a prompt."""
+def _generate(model: Any, tokenizer: Any, prompt: str, max_new_tokens: int = _PARITY_TOKENS) -> str:
+    """Greedy-generate a short completion for a prompt.
+
+    The window is deliberately tiny. Parity is checking whether the *merge*
+    changed the model, and a merge that changed it diverges immediately — the
+    first few tokens are the signal. Generating 64 tokens instead compares
+    free-form reasoning, where a bf16 merge legitimately breaks near-ties deep
+    into the text: the first end-to-end run with a 64-token window reported two
+    probes differing only after "…I need to confirm that my answer is just the
+    word…", which says nothing about the merge. Comparing text that is
+    inherently tie-prone measures the tie-break, not the merge.
+    """
     torch = require("torch", hint=torch_hint())
     messages = [{"role": "user", "content": prompt}]
     if tokenizer.chat_template is not None:
@@ -84,14 +97,17 @@ class LocalServingBackend:
         model.save_pretrained(str(served_dir))
         tokenizer.save_pretrained(str(served_dir))
 
-        mismatches: list[str] = []
+        mismatches: list[ParityMismatch] = []
         matches = 0
         for probe, reference in zip(request.probe, reference_outputs, strict=False):
             expected = probe.expected if probe.expected is not None else reference
-            if _generate(model, tokenizer, probe.prompt) == expected:
+            actual = _generate(model, tokenizer, probe.prompt)
+            if actual == expected:
                 matches += 1
             else:
-                mismatches.append(probe.prompt)
+                mismatches.append(
+                    ParityMismatch(prompt=probe.prompt, expected=expected, actual=actual)
+                )
         return ExportResult(
             served_dir=str(served_dir),
             merged=True,

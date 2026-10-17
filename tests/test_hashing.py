@@ -9,7 +9,6 @@ from frictiontune.core.hashing import (
     compute_run_id,
     content_hash,
     file_sha256,
-    short,
 )
 
 if TYPE_CHECKING:
@@ -55,8 +54,3 @@ def test_file_sha256_matches_streamed_read(tmp_path: Path) -> None:
     target = tmp_path / "blob.bin"
     target.write_bytes(b"hello world")
     assert file_sha256(target) == file_sha256(target, chunk_size=2)
-
-
-def test_short_truncates() -> None:
-    assert short("0123456789abcdef") == "0123456789ab"
-    assert len(short("abc", length=2)) == 2

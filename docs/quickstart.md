@@ -77,17 +77,21 @@ run with `--allow-gated`.
 Ask the orchestrator what it would do, without doing it:
 
 ```bash
-uv run frictiontune run --hardware 3x24g --dry-run
+uv run frictiontune run --hardware generic --dry-run
 ```
 
 `--hardware` selects a preset from `configs/hardware/`. The presets only affect
 training and describe VRAM, quantisation, batch sizes, and context length. Nothing
-about your GPU count is hardcoded.
+about your GPU count is hardcoded. `generic` (or omitting `--hardware` entirely)
+runs one rank per visible accelerator with a conservative single-card budget, so
+it works on a box you have not characterised; pick a named preset once you know
+your card count and VRAM, or author one — see
+[`configs/hardware/README.md`](../configs/hardware/README.md).
 
 ## 4. Run the core pipeline
 
 ```bash
-uv run frictiontune run --hardware 3x24g
+uv run frictiontune run --hardware generic
 ```
 
 Progress is logged in the terminal and, more importantly, written to disk. Every

@@ -83,8 +83,19 @@ the same tree runs against different providers.
 
 An `LlmRoleConfig` has: `provider`, `base_url`, `model`, `api_key_env`,
 `temperature`, `max_tokens`, `concurrency`, `cache`, `timeout_s`,
-`response_format`, and a `retry` policy. `cache: false` is used for
-`target`/`adapter` because replay must not serve cached generations.
+`response_format`, `extra_body`, and a `retry` policy. `cache: false` is used
+for `target`/`adapter` because replay must not serve cached generations.
+
+`extra_body` is a strict JSON object merged verbatim into the request body. It
+exists for provider behaviour the OpenAI-compatible surface does not
+standardise — most importantly chain-of-thought control, which has no portable
+spelling (`{"chat_template_kwargs": {"enable_thinking": false}}` on
+vLLM/SGLang, `{"reasoning_effort": "low"}` on OpenAI-style servers). Because
+reasoning tokens count against `max_tokens` and can empty the `content` of a
+structured reply, a deployment overlay typically disables thinking for the
+analyst-side roles; see `configs/environments/bitdeer.yaml` for a worked
+example. `extra_body` participates in the cache key, so the same prompt sent
+with different provider knobs is a different request.
 
 `response_format` is `text`, `json_object`, or `json_schema`. Structured calls
 always carry the pydantic JSON Schema in the messages; setting a role to
@@ -97,25 +108,47 @@ safely — leave roles on `json_object` unless you know the backend honours
 
 Embeddings are used only for **retrieval** — proposing candidate neighbours for an
 agent to judge — never for a threshold decision. `EmbeddingConfig` mirrors the role
-config: `provider`, `base_url`, `model`, `api_key_env`, `dimensions`, `cache`,
-`timeout_s`.
+config: `provider`, `base_url`, `model`, `api_key_env`, `dimensions`,
+`max_input_chars`, `cache`, `timeout_s`.
+
+`max_input_chars` (default 8000, `FRICTIONTUNE_EMBED_MAX_INPUT_CHARS`) bounds each
+text sent to the embedder. Providers reject an over-long input with a generic
+`400 invalid request` rather than truncating it, so the backend keeps the head and
+tail of an over-long text and elides the middle. The default stays under a
+~8192-token context even for ~one-token-per-character scripts; raise it only for a
+corpus you know is low-density.
 
 ## Hardware presets (`configs/hardware/`)
 
 A preset is a named `HardwareConfig`. Select it with `--hardware`, or set fields
-directly with `--set hardware.devices=2`.
+directly with `--set hardware.devices=2`. It is the only place a run declares
+its topology and memory budget; nothing else inspects the machine.
 
-| Preset | Devices | Quant | Offload | Context |
-| --- | --- | --- | --- | --- |
-| `1x24g` | 1 | nf4 | none | 8192 |
-| `2x24g` | 2 | nf4 | none | 8192 |
-| `3x24g` | 3 | nf4 | none | 8192 |
-| `cpu-offload-128g` | 1 | nf4 | cpu | 4096 |
-| `mi300x-192g` | 1 | nf4 | none | 16384 |
-| `cloud-h100x4` | 4 | nf4 | none | 16384 |
+| Preset | Devices | Quant | Batch/card | Grad accum | Effective | Context |
+| --- | --- | --- | --- | --- | --- | --- |
+| `generic` | `auto` | nf4 | 1 | 8 | 8 × N | 8192 |
+| `1x24g` | 1 | nf4 | 1 | 16 | 16 | 8192 |
+| `2x24g` | 2 | nf4 | 1 | 8 | 16 | 8192 |
+| `3x24g` | 3 | nf4 | 1 | 4 | 12 | 16384 |
+| `mi300x-192g` | 1 | nf4 | 2 | 8 | 16 | 16384 |
+| `cloud-h100x4` | 4 | nf4 | 2 | 4 | 32 | 16384 |
+
+`generic` (or omitting `--hardware`, which uses the same defaults) runs one rank
+per visible accelerator with a conservative single-card budget: the portable
+starting point for any machine. `devices: auto` does the same; prefer `generic`
+when you want the choice to be explicit. See
+[`configs/hardware/README.md`](../configs/hardware/README.md) for the field-by-field
+authoring guide: how to size a new preset for any vendor or card count, the
+memory model behind `per_device_batch`/`max_seq_len`, and the ROCm GQA note.
 
 Adding a preset is a matter of dropping a new YAML file in the directory. The
 pipeline never inspects the machine to guess; it uses what you configure.
+
+There is deliberately no CPU/ZeRO offload preset. The single-card QLoRA path
+(nf4) already fits an 8B base in 24 GB, and the installed TRL/peft stack refuses
+to *train* a model loaded with `device_map="auto"`, so an offload knob would be a
+silent no-op. A real offload path (DeepSpeed ZeRO-3) belongs in a training
+backend, not in a config field that nothing reads.
 
 ## Taxonomy (`configs/friction_taxonomy.yaml`)
 
@@ -126,8 +159,15 @@ The SWE-chat axes plus our leaf labels:
 * **causes** — `context`, `capability`, `instruction-ambiguity`, `tool/env`, `spec`
 * **costs** — `effort`, `trust`, `irreversible`
 * **resolutions** — `user-correction`, `self-recovery`, `none`
-* **leaves** — each leaf maps to exactly one `[form, cause]` pair, e.g.
-  `instruction_misread: [intent-interpretation, instruction-ambiguity]`.
+* **leaves** — each leaf maps to exactly one `form`/`cause` pair and carries the
+  `description` injected into the analyst prompt, e.g.
+
+  ```yaml
+  instruction_misread:
+    form: intent-interpretation
+    cause: instruction-ambiguity
+    description: The assistant misread or misapplied what the human actually asked for.
+  ```
 
 `friction_detect` rejects (or repairs) any event whose leaf disagrees with its
 declared form/cause, so the taxonomy is self-consistent by construction.
@@ -172,7 +212,7 @@ The fastest way to see the full contract is `.env.example`. The important groups
 | `FRICTIONTUNE_LLM_BASE_URL` / `_API_KEY` / `FRICTIONTUNE_MODEL` | Analyst/judge endpoint. |
 | `FRICTIONTUNE_TARGET_BASE_URL` / `_MODEL` / `_API_KEY` | Base model endpoint for replay. |
 | `FRICTIONTUNE_ADAPTER_BASE_URL` / `_MODEL` | Tuned model endpoint for replay. |
-| `FRICTIONTUNE_EMBED_BASE_URL` / `_MODEL` / `_API_KEY` | Embeddings. |
+| `FRICTIONTUNE_EMBED_BASE_URL` / `_MODEL` / `_API_KEY` / `_MAX_INPUT_CHARS` | Embeddings. |
 | `FRICTIONTUNE_TEACHER_MODEL`, `FRICTIONTUNE_USER_SIM_MODEL` | Generation roles. |
 | `FRICTIONTUNE_ROLLOUT_URL` / `_TOKEN` | External agent runner for rollouts. |
 | `FRICTIONTUNE_GRPO_JUDGE_URL` | Optional remote judge reward term. |

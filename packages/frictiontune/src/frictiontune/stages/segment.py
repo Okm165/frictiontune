@@ -8,6 +8,7 @@ short episodes get a single phase without an LLM call.
 
 from __future__ import annotations
 
+import asyncio
 from itertools import groupby
 from typing import TYPE_CHECKING
 
@@ -18,7 +19,7 @@ from frictiontune.domain.ids import episode_id, phase_id
 from frictiontune.domain.trace import Message, ToolPart
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
-from frictiontune.stages.common import bounded_gather, clip, render_transcript
+from frictiontune.stages.common import clip, render_transcript
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -135,6 +136,8 @@ class Segment(Stage):
         name="segment",
         tier=Tier.A,
         requires_llm=True,
+        prompts=["segment_phases"],
+        roles=[RoleName.FRICTION_ANALYST],
         lead=Lead.CORE,
         roi="High",
         justification=(
@@ -221,10 +224,10 @@ class Segment(Stage):
         for session_id, messages in self._group_messages(ctx):
             session_count += 1
             episodes = cut_episodes(session_id, messages)
-            labelled: list[list[Phase]] = await bounded_gather(
-                lambda episode: self._label_phases(episode, ctx, settings),
-                episodes,
-                limit=settings_min_concurrency(ctx),
+            labelled: list[list[Phase]] = list(
+                await asyncio.gather(
+                    *(self._label_phases(episode, ctx, settings) for episode in episodes)
+                )
             )
             for episode, phases in zip(episodes, labelled, strict=True):
                 episode.phases = list(phases)
@@ -243,9 +246,9 @@ class Segment(Stage):
             "phases": phase_count,
             "mean_phases_per_episode": (phase_count / episode_count) if episode_count else 0.0,
         }
-        ctx.emit_json("segment_report.json", report)
+        ctx.emit_json("segment_report", report)
         ctx.emit_text(
-            "report.md",
+            "report",
             "# Segment\n\n"
             f"- sessions: {session_count}\n"
             f"- episodes: {episode_count}\n"
@@ -260,11 +263,6 @@ class Segment(Stage):
                 "phases": float(phase_count),
             },
         )
-
-
-def settings_min_concurrency(ctx: StageContext) -> int:
-    """Concurrency cap derived from the friction-analyst role config."""
-    return max(1, ctx.config.role(RoleName.FRICTION_ANALYST).concurrency)
 
 
 __all__ = ["Segment", "SegmentSettings", "compute_features", "cut_episodes"]

@@ -47,7 +47,28 @@ class SecretCandidate(BaseModel):
     start: int
     end: int
     kind: str
-    preview: str
+
+
+def _passes_luhn(value: str) -> bool:
+    """Whether ``value``'s digits form a Luhn-valid 13-19 digit number.
+
+    The cheap ``card`` pattern matches any 13-19 digit run, which in real
+    transcripts is mostly order ids, timestamps, and hashes. Luhn is the
+    industry checksum every real card number satisfies; applying it is pure
+    validation, so the reviewer never sees the noise it removes.
+    """
+    digits = [int(ch) for ch in value if ch.isdigit()]
+    if not 13 <= len(digits) <= 19:
+        return False
+    checksum = 0
+    parity = len(digits) % 2
+    for index, digit in enumerate(digits):
+        if index % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        checksum += digit
+    return checksum % 10 == 0
 
 
 def detect_candidates(text: str) -> list[SecretCandidate]:
@@ -57,6 +78,8 @@ def detect_candidates(text: str) -> list[SecretCandidate]:
         for match in pattern.finditer(text):
             start = match.start(1) if match.groups() else match.start(0)
             end = match.end(1) if match.groups() else match.end(0)
+            if kind == "card" and not _passes_luhn(text[start:end]):
+                continue
             spans.append((start, end, kind))
     spans.sort(key=lambda span: (span[0], -(span[1] - span[0])))
 
@@ -71,7 +94,6 @@ def detect_candidates(text: str) -> list[SecretCandidate]:
                 start=start,
                 end=end,
                 kind=kind,
-                preview=text[start:end][:120],
             )
         )
         last_end = end

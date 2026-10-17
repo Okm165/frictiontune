@@ -2,7 +2,8 @@
 
 All model access in frictiontune goes through :class:`LlmClient`. It owns:
 
-* one ``AsyncOpenAI`` per ``(base_url, api_key)`` endpoint,
+* one ``AsyncOpenAI`` per ``(base_url, api_key)`` endpoint, and round-robin
+  across several when a role names replicas,
 * transport retries via the shared :func:`~frictiontune.core.retry.with_retry`,
 * content-hash caching so identical requests never pay twice,
 * per-role concurrency limiting.
@@ -54,6 +55,10 @@ class LlmResponse(BaseModel):
     text: str
     model: str
     finish_reason: str | None = None
+    # The provider's private chain-of-thought, when it returns one. Kept rather
+    # than discarded so the reasoning stream is auditable (and usable by a
+    # reasoning-training policy); structured calls ignore it and read ``text``.
+    reasoning: str = ""
     usage: TokenUsage = Field(default_factory=TokenUsage)
     cached: bool = False
 
@@ -62,6 +67,21 @@ def _api_key(config: LlmRoleConfig) -> str:
     if config.api_key_env:
         return os.environ.get(config.api_key_env, "EMPTY")
     return "EMPTY"
+
+
+def base_urls(config: LlmRoleConfig) -> tuple[str, ...]:
+    """Split ``base_url`` into one or more endpoints.
+
+    A single URL behaves exactly as before. A comma-separated list names
+    *identical* replicas — the shape a data-parallel local server takes when the
+    model fits one card and the box has several: one process per card, each on
+    its own port. The client spreads calls across them round-robin, so no proxy
+    sits between the pipeline and the models. The endpoints must serve the same
+    model and sampling knobs; the cache key covers the whole list, so a change
+    to the replica set invalidates it the same way a change to one URL would.
+    """
+    urls = tuple(part.strip().rstrip("/") for part in (config.base_url or "").split(","))
+    return tuple(url for url in urls if url) or ("",)
 
 
 def _message_text(message: Any) -> str:
@@ -86,6 +106,17 @@ def _message_text(message: Any) -> str:
                 chunks.append(text)
         return "\n".join(chunks)
     return ""
+
+
+def _reasoning_text(message: Any) -> str:
+    """Extract a provider's ``reasoning_content`` stream, or ``""``.
+
+    Reasoning-capable providers return chain-of-thought alongside ``content``
+    under a vendor key (``reasoning_content`` for vLLM/SGLang and the zai/GLM
+    family). It is captured for auditing but never treated as the answer.
+    """
+    reasoning = getattr(message, "reasoning_content", None)
+    return reasoning if isinstance(reasoning, str) else ""
 
 
 def build_response_format(
@@ -125,17 +156,27 @@ class LlmClient:
         self._cache = cache
         self._sdk: dict[tuple[str, str, float], AsyncOpenAI] = {}
         self._semaphores: dict[RoleName, asyncio.Semaphore] = {}
+        # Round-robin cursor per role, advanced when a role names several
+        # replicas. asyncio runs on one thread, so the read-and-increment needs
+        # no lock; it happens before the first ``await``.
+        self._round_robin: dict[RoleName, int] = {}
 
-    def _endpoint(self, config: LlmRoleConfig) -> AsyncOpenAI:
-        # The endpoint cache key must cover every transport-affecting field.
-        # Roles commonly share a base_url but differ in timeout; keying on
-        # (base_url, api_key) alone would let the first role's timeout silently
-        # govern the rest.
-        key = (config.base_url or "", _api_key(config), config.timeout_s)
+    def _endpoint(self, role: RoleName, config: LlmRoleConfig) -> AsyncOpenAI:
+        # A role may name several identical replicas (comma-separated). Pick the
+        # next one round-robin so concurrent calls fan out across the cards; with
+        # one URL this is a no-op. The SDK cache key covers the concrete endpoint
+        # along with every other transport-affecting field — roles commonly share
+        # a base_url but differ in timeout, and keying on (base_url, api_key)
+        # alone would let the first role's timeout silently govern the rest.
+        urls = base_urls(config)
+        index = self._round_robin.get(role, 0)
+        base_url = urls[index % len(urls)]
+        self._round_robin[role] = index + 1
+        key = (base_url, _api_key(config), config.timeout_s)
         client = self._sdk.get(key)
         if client is None:
             client = AsyncOpenAI(
-                base_url=config.base_url,
+                base_url=base_url or None,
                 api_key=_api_key(config),
                 timeout=config.timeout_s,
                 max_retries=0,  # we own retries centrally
@@ -171,6 +212,7 @@ class LlmClient:
                 "temperature": config.temperature,
                 "max_tokens": config.max_tokens,
                 "response_format": config.response_format,
+                "extra_body": config.extra_body,
                 "force_json": force_json,
                 "schema_name": schema_name,
                 "response_schema": response_schema,
@@ -232,7 +274,9 @@ class LlmClient:
             payload["response_format"] = response_format
 
         async def _call() -> Any:
-            return await self._endpoint(config).chat.completions.create(**payload)
+            return await self._endpoint(role, config).chat.completions.create(
+                **payload, extra_body=config.extra_body or None
+            )
 
         semaphore = self._semaphore(role, config)
         try:
@@ -258,6 +302,7 @@ class LlmClient:
             text=_message_text(message),
             model=getattr(completion, "model", None) or config.model,
             finish_reason=getattr(choice, "finish_reason", None),
+            reasoning=_reasoning_text(message),
             usage=TokenUsage(
                 prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
                 completion_tokens=getattr(usage, "completion_tokens", 0) or 0,

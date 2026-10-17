@@ -17,6 +17,7 @@ from typing import Any
 from frictiontune.backends.models import GrpoRequest, TrainingRequest, TrainingResult
 from frictiontune.core.errors import StageError
 
+from frictiontune_train import distributed
 from frictiontune_train.lazy import require, torch_hint
 from frictiontune_train.loaders import continue_from_adapter, load_tokenizer, save_adapter
 from frictiontune_train.reward import build_reward
@@ -49,7 +50,12 @@ def _load_for_grpo(request: GrpoRequest) -> tuple[Any, Any]:
     if request.adapter_dir and Path(request.adapter_dir).is_dir():
         # Continue training an existing adapter rather than re-initialising LoRA.
         tokenizer = load_tokenizer(request.base_model)
-        model = continue_from_adapter(request.base_model, request.adapter_dir, request.hardware)
+        model = continue_from_adapter(
+            request.base_model,
+            request.adapter_dir,
+            request.hardware,
+            device_map=distributed.device_map(),
+        )
         return model, tokenizer
 
     request_stub = TrainingRequest(
@@ -60,12 +66,12 @@ def _load_for_grpo(request: GrpoRequest) -> tuple[Any, Any]:
         seed=request.seed,
         max_seq_len=request.hardware.max_seq_len,
     )
-    return load_model_and_tokenizer(request_stub)
+    return load_model_and_tokenizer(request_stub, device_map=distributed.device_map())
 
 
 def run_grpo(request: GrpoRequest) -> TrainingResult:
     """Execute one GRPO job and return its artifacts."""
-    require("torch", hint=torch_hint())
+    torch = require("torch", hint=torch_hint())
     datasets = require("datasets", hint=torch_hint())
     trl = require("trl", hint=torch_hint())
 
@@ -74,6 +80,8 @@ def run_grpo(request: GrpoRequest) -> TrainingResult:
         raise StageError("train_grpo", f"missing prompts file {prompts_path}")
     prompts = _read_prompts(prompts_path)
 
+    if distributed.is_distributed():
+        torch.cuda.set_device(distributed.local_rank())
     model, tokenizer = _load_for_grpo(request)
     dataset = datasets.Dataset.from_dict({"prompt": prompts})
     reward = build_reward(
@@ -98,6 +106,7 @@ def run_grpo(request: GrpoRequest) -> TrainingResult:
                 "gradient_checkpointing": request.hardware.gradient_checkpointing,
                 "seed": request.seed,
                 "report_to": [],
+                **distributed.config_kwargs(),
             },
             # GRPO generates via ``max_completion_length``; ``max_new_tokens``
             # is a ``generate`` kwarg that GRPOConfig would silently ignore.
@@ -117,7 +126,11 @@ def run_grpo(request: GrpoRequest) -> TrainingResult:
     train_output = trainer.train()
     elapsed = time.time() - started
 
-    adapter_dir = save_adapter(model, request.output_dir, tokenizer)
+    adapter_dir = request.output_dir
+    checkpoints: list[str] = []
+    if distributed.is_main_process():
+        adapter_dir = save_adapter(model, request.output_dir, tokenizer)
+        checkpoints = sorted(str(path) for path in Path(adapter_dir).glob("checkpoint-*"))
     metrics = {
         str(key): float(value)
         for key, value in (train_output.metrics or {}).items()
@@ -133,5 +146,5 @@ def run_grpo(request: GrpoRequest) -> TrainingResult:
         final_loss=metrics.get("loss", 0.0),
         wall_time_s=elapsed,
         metrics=metrics,
-        checkpoints=sorted(str(path) for path in Path(adapter_dir).glob("checkpoint-*")),
+        checkpoints=checkpoints,
     )

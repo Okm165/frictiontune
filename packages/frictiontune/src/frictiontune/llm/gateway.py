@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from frictiontune.core.errors import LlmSchemaError
+from frictiontune.core.errors import LlmSchemaError, LlmTruncatedError
 from frictiontune.core.errors import ValidationError as FtValidationError
 from frictiontune.core.json import dumps
 from frictiontune.core.logging import get_logger
@@ -34,7 +34,7 @@ from frictiontune.llm.messages import ChatMessage, ToolSpec
 from frictiontune.llm.parsing import iter_json_objects
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Collection, Sequence
     from typing import Any
 
     from frictiontune.config.models import LlmRoleConfig, RoleName
@@ -131,9 +131,13 @@ class LlmGateway:
         self._max_repairs = max_repairs
         self._repair_policy = RetryPolicy.immediate(max_repairs + 1)
 
-    def prompt_fingerprint(self) -> str:
-        """Fingerprint of the on-disk prompt library, for run identity."""
-        return self._registry.fingerprint()
+    def prompt_fingerprint(self, names: Collection[str] | None = None) -> str:
+        """Fingerprint of the prompts a stage uses, for run identity.
+
+        ``names`` is the stage's declared prompt list; ``None`` covers the whole
+        library, which is the conservative default.
+        """
+        return self._registry.fingerprint(names)
 
     async def complete_text(
         self,
@@ -185,6 +189,19 @@ class LlmGateway:
             problem = self._validate(response.text, schema)
             if not isinstance(problem, str):
                 return problem
+            # A reply cut off at ``max_tokens`` cannot be repaired by re-asking:
+            # the budget, not the phrasing, is the problem (usually a reasoning
+            # model spending the whole completion allowance on chain-of-thought).
+            # Report it as itself instead of as an opaque "no JSON object", and
+            # do not waste a repair attempt on it. A truncated reply whose text
+            # still contains a valid object was already accepted above, so this
+            # only fires when nothing usable came back.
+            if response.finish_reason == "length":
+                raise LlmTruncatedError(
+                    f"{role.value}/{prompt_name}: reply truncated at max_tokens="
+                    f"{config.max_tokens} (finish_reason=length); the output budget "
+                    "was exhausted before a complete JSON object was produced"
+                )
             _log.warning(
                 "structured output rejected",
                 role=role.value,

@@ -10,7 +10,7 @@ import asyncio
 from collections import defaultdict
 from typing import TYPE_CHECKING, TypeVar
 
-from frictiontune.core.errors import StageError
+from frictiontune.core.errors import LlmError, StageError, ValidationError
 from frictiontune.domain.friction import FrictionEvent
 from frictiontune.domain.responses import InferredToolSchema
 
@@ -94,54 +94,70 @@ def analyst_prompt_values(
         "tool_errors": tool_errors,
         "compactions": compactions,
         "transcript": clip(transcript, max_chars),
-        "forms": ", ".join(taxonomy.forms),
-        "causes": ", ".join(taxonomy.causes),
         "costs": ", ".join(taxonomy.costs),
         "resolutions": ", ".join(taxonomy.resolutions),
         "leaf_axes": "\n".join(
-            f"- {leaf}: form={form}, cause={cause}"
-            for leaf, (form, cause) in sorted(taxonomy.leaves.items())
+            f"- {leaf}: form={axis.form}, cause={axis.cause}"
+            + (f" — {axis.description}" if axis.description else "")
+            for leaf, axis in sorted(taxonomy.leaves.items())
         ),
     }
 
 
-async def bounded_gather(
+async def gather_tolerant(
     factory: Callable[[T], Awaitable[R]],
     items: Sequence[T],
-    *,
-    limit: int,
-) -> list[R]:
-    """Run ``factory(item)`` for every item with at most ``limit`` in flight."""
-    semaphore = asyncio.Semaphore(max(1, limit))
+) -> list[R | BaseException]:
+    """Run ``factory(item)`` for every item, returning results and failures in order.
 
-    async def _run(item: T) -> R:
-        async with semaphore:
-            return await factory(item)
+    A fan-out stage must treat one item's failure as *that item's* outcome, not
+    the batch's: a single unrepairable LLM reply should not abort a stage that
+    has already produced good work for its other items. Concurrency is not
+    bounded here: every fan-out in this codebase calls an LLM, and the role
+    semaphore in :class:`~frictiontune.llm.client.LlmClient` already bounds how
+    many of those are in flight, so a second stage-level limit would only
+    duplicate it.
 
-    return list(await asyncio.gather(*(_run(item) for item in items)))
+    Each element is either a result or the :class:`BaseException` that item
+    raised, in the same order as ``items``. The caller decides what a failure
+    means for its domain — a skip with a recorded reason (``mine``, ``judge``,
+    ``compile_rules``) or a conservative default (``verify_rules``) — so this
+    helper stays pure plumbing and never invents a semantic judgment.
+    """
+    return list(await asyncio.gather(*(factory(item) for item in items), return_exceptions=True))
+
+
+def failure_reason(exc: BaseException) -> str:
+    """Map a per-item failure to a stable, report-facing skip reason.
+
+    The labels distinguish the two failure modes an operator cares about when a
+    fan-out stage reports skips: a reply that could not be validated into the
+    schema even after repair, versus a call that failed at the transport or
+    provider. Anything else is surfaced by its type name so nothing is hidden.
+    """
+    if isinstance(exc, ValidationError):
+        return "schema_rejected"
+    if isinstance(exc, LlmError):
+        return "llm_failed"
+    return f"error:{type(exc).__name__}"
 
 
 def validate_event(event: FrictionEvent, config: RunConfig) -> FrictionEvent:
-    """Validate a friction event's axes against the configured taxonomy."""
+    """Validate a friction event's leaf, cost, and resolution against the taxonomy.
+
+    ``form`` and ``cause`` are not checked for agreement with the leaf: they are
+    *derived* from the leaf by the caller, so a mismatch cannot occur. What is
+    still validated is that the leaf is known and that the cost and resolution
+    are configured values.
+    """
     taxonomy = config.taxonomy
     errors: list[str] = []
-    if event.form not in taxonomy.forms:
-        errors.append(f"unknown form {event.form!r}")
-    if event.cause not in taxonomy.causes:
-        errors.append(f"unknown cause {event.cause!r}")
+    if event.leaf not in taxonomy.leaves:
+        errors.append(f"unknown leaf {event.leaf!r}")
     if event.cost not in taxonomy.costs:
         errors.append(f"unknown cost {event.cost!r}")
     if event.resolution not in taxonomy.resolutions:
         errors.append(f"unknown resolution {event.resolution!r}")
-    if event.leaf not in taxonomy.leaves:
-        errors.append(f"unknown leaf {event.leaf!r}")
-    else:
-        form, cause = taxonomy.leaves[event.leaf]
-        if event.form != form or event.cause != cause:
-            errors.append(
-                f"leaf {event.leaf!r} maps to form={form!r}/cause={cause!r}, "
-                f"not {event.form!r}/{event.cause!r}"
-            )
     if errors:
         raise StageError("friction_detect", f"invalid friction event: {'; '.join(errors)}")
     return event

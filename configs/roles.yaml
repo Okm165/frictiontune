@@ -49,7 +49,9 @@ llm:
     model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
     api_key_env: FRICTIONTUNE_LLM_API_KEY
     temperature: 0.0
-    max_tokens: 4096
+    # Compaction rewrites a long tool output; the reply is text-shaped and can be
+    # several KB, so it gets the endpoint's full allowance.
+    max_tokens: 8192
     concurrency: 8
     response_format: json_object
 
@@ -59,7 +61,8 @@ llm:
     model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
     api_key_env: FRICTIONTUNE_LLM_API_KEY
     temperature: 0.0
-    max_tokens: 2048
+    # An inferred JSON Schema for a tool with many parameters can be long.
+    max_tokens: 4096
     concurrency: 8
     response_format: json_object
 
@@ -71,7 +74,13 @@ llm:
     api_key_env: FRICTIONTUNE_LLM_API_KEY
     # non-zero temperature enables the configured ensemble (settings.ensemble)
     temperature: 0.2
-    max_tokens: 8192
+    # An analysis is a handful of events, each with a one-line summary and a
+    # short verbatim quote: over 230 cached replies the median is ~740 chars and
+    # the longest 3 146 (~900 tokens). The old 8192 let a runaway fill 30 k chars
+    # of `evidence` quotes, and because the ensemble needs a quorum of passes,
+    # two runaway passes aborted the whole data phase. 2048 is 2x the longest
+    # real reply and turns a runaway into a fast, single-episode failure.
+    max_tokens: 2048
     concurrency: 4
     response_format: json_object
 
@@ -82,6 +91,20 @@ llm:
     api_key_env: FRICTIONTUNE_LLM_API_KEY
     temperature: 0.0
     max_tokens: 8192
+    concurrency: 4
+    response_format: json_object
+
+  # The good-work miner. Its reply is a handful of short spans with a one-line
+  # behaviour each, so the budget is sized to that rather than inherited from the
+  # roles that emit long prose — a runaway here would be a span list, not an
+  # essay, and 1024 tokens is several times the longest real reply.
+  harvester:
+    provider: openai_compatible
+    base_url: ${FRICTIONTUNE_LLM_BASE_URL:-http://localhost:8000/v1}
+    model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
+    api_key_env: FRICTIONTUNE_LLM_API_KEY
+    temperature: 0.0
+    max_tokens: 1024
     concurrency: 4
     response_format: json_object
 
@@ -101,7 +124,9 @@ llm:
     model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
     api_key_env: FRICTIONTUNE_LLM_API_KEY
     temperature: 0.0
-    max_tokens: 4096
+    # A per-episode rule set with verifier specs and rationales can be long; the
+    # first real run truncated at 4096, so it gets the endpoint's full allowance.
+    max_tokens: 8192
     concurrency: 4
     response_format: json_object
 
@@ -111,7 +136,12 @@ llm:
     model: ${FRICTIONTUNE_MODEL:-gpt-4o-mini}
     api_key_env: FRICTIONTUNE_LLM_API_KEY
     temperature: 0.0
-    max_tokens: 4096
+    # A verdict is three booleans, a confidence, a short rationale, and a handful
+    # of evidence turns. The local model used to enumerate *every* turn in
+    # `evidence_turns` and fill the old 8192 cap (~8 K tokens, minutes per call,
+    # and 284 rules × 8 episodes of them). 1024 is ample for a real verdict and
+    # turns a runaway into a fast, tolerated truncation.
+    max_tokens: 1024
     concurrency: 4
     response_format: json_object
 

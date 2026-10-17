@@ -1,6 +1,6 @@
 ---
 name: attribution
-version: "4"
+version: "5"
 role: attributor
 schema: Attribution
 description: >
@@ -23,7 +23,7 @@ Rules:
   where it should have gathered that context.
 - `cause` must be one of: {{causes}}.
 - If you cannot identify a single decisive step, set `decisive_turn` null and
-  explain.
+  explain in one sentence.
 - `confidence` is your calibrated probability (0–1) that the chosen turn is the
   decisive one.
 - {{> untrusted-data }}

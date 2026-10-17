@@ -4,8 +4,34 @@ tokenizer_path: ${FRICTIONTUNE_TOKENIZER:-}
 prefer_hf: true
 trust_remote_code: false
 include_reasoning_context: true
-# Whether reasoning tokens are trained too. Masking them is the conservative POC
-# default; the long-trajectory finding may argue for training them later.
-train_reasoning: false
-max_seq_len: 8192
-batch_size: 64
+# Whether reasoning tokens are trained too. Masking them was the conservative
+# POC default; the A/B on frozen data (2026-10-16) says train them.
+#
+# The measurement's noise floor was the blocker: two full runs of the *same*
+# configuration produced friction_drop 0.333 and 0.200, because each `all`
+# re-runs the stochastic data phase and trains on a different dataset. This knob
+# is the clean way to vary one thing — it changes the *mask*, not the examples,
+# so `judged` and the held-out episode ids are identical and only the
+# supervision differs. The upstream data stages hit the cache, which is what
+# makes the comparison possible at all.
+#
+# Result (n=4 held-out episodes; baselines identical in both arms, which is the
+# check that the comparison is clean):
+#
+#   signal               train_reasoning=false   train_reasoning=true
+#   friction_avoidance   +0.75                   +0.75
+#   correctness          -0.25                   +0.25
+#   clarity               0.00                   +0.50
+#   verbosity_chars      -3845                   -3062
+#   friction_drop         0.200                   0.200
+#
+# The headline is unchanged because it is derived from `friction_avoidance`
+# alone; three of the four judged signals are better or equal with reasoning
+# trained, and the verbosity collapse is less extreme, which is the expected
+# shape: the model learns to *produce* the analysis instead of only its
+# conclusion. n=4 cannot establish this, but nothing argues for masking.
+train_reasoning: true
+# `max_seq_len` is intentionally unset: the stage then builds to the hardware
+# preset's `max_seq_len`, the same ceiling training uses, so a record is never
+# windowed smaller than training can hold (GAP-043). Set it only to bound
+# sequence length explicitly.

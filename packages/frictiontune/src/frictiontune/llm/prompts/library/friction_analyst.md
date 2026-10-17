@@ -1,6 +1,6 @@
 ---
 name: friction_analyst
-version: "5"
+version: "7"
 role: friction_analyst
 schema: FrictionAnalysis
 description: >
@@ -27,23 +27,29 @@ Friction is present when the human had to:
 
 Normal, productive iteration is NOT friction: a single tool failure that the
 assistant diagnoses and fixes, with no human effort spent and no constraint
-broken, is good behaviour.
+broken, is good behaviour. But a failure the assistant repeats, or one it should
+have avoided given the context it already had, still counts even when it
+recovers on its own: report it with resolution=self-recovery. The recovery is a
+training signal, so do not suppress an event merely because no human turn was
+spent.
 
 ## Axes (use exactly these values)
-- form (what went wrong): {{forms}}
-- cause (why): {{causes}}
 - cost (what it cost the human): {{costs}}
 - resolution (how it ended): {{resolutions}}
-- leaf (the most specific label): choose exactly one from the list below. Each
-  leaf fixes its own form and cause, so pick the leaf first and set `form` and
-  `cause` to match it exactly:
+- leaf (the most specific label): choose exactly one from the list below. The
+  leaf alone determines form and cause; the pipeline derives them, so do not
+  report them:
 {{leaf_axes}}
 
 ## Evidence discipline
 - Every event must cite at least one span pair of a real transcript turn index
   and a verbatim quote (<= 300 characters) copied from that turn.
-- Verify before you report: if a later turn shows the "problem" was resolved
-  without human effort, do not report it.
+- Verify before you report: a *single* tool failure the assistant diagnosed and
+  fixed in the same episode, costing the human nothing, is not friction (Example
+  B). A failure it *repeated*, or should have avoided given the context it
+  already had, is friction even when it self-recovered — report those with
+  resolution=self-recovery. Do not let "it recovered" alone decide the call; the
+  repeated/avoidable test above does.
 - Do not report the same underlying problem twice.
 
 ## Worked examples
@@ -51,8 +57,7 @@ Example A — friction present:
   user (turn 0): "Add retry to the uploader but keep the 30s timeout."
   assistant (turn 1): adds retry, raises the timeout to 60s, says "done".
   user (turn 2): "I said keep 30s."
-  → one event: form=rule-following, cause=instruction-ambiguity,
-    leaf=ignored_constraint, cost=effort, resolution=user-correction,
+  → one event: leaf=ignored_constraint, cost=effort, resolution=user-correction,
     evidence=(turn 2, "I said keep 30s").
     The human spent a turn re-stating a constraint they had already given.
 

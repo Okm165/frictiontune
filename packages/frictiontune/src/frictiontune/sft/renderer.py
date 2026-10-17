@@ -36,6 +36,13 @@ if TYPE_CHECKING:
 _REASONING_OPEN = "<|reasoning|>"
 _REASONING_CLOSE = "<|/reasoning|>"
 
+# A fixed trailing message appended while measuring one message's token span.
+# It makes every real message "not last", which matters for templates such as
+# Qwen3 that render the final assistant turn differently (a thinking scaffold).
+# A user turn renders identically wherever it appears, so its token block is a
+# constant that can be stripped exactly.
+_STABILITY_PROBE = ChatMessage.user("frictiontune-stability-probe")
+
 # Both tokenizers serialize only a message's role and text content, so a tool
 # call attached as a structured field would be silently dropped from the
 # training text (and a tool result's name and id with it). These markers carry
@@ -52,8 +59,13 @@ def _render_tool_call(part: ToolPart) -> str:
 
 
 def _tool_response_text(name: str, output: str) -> str:
-    """Serialize a tool result so its name survives templates that drop fields."""
-    return f'<tool_response name="{name}">\n{output}\n</tool_response>'
+    """Serialize a tool result so its name survives templates that drop fields.
+
+    The name is carried as a plain-text marker rather than a ``<tool_response>``
+    element: Qwen-style templates already wrap a ``tool`` turn in
+    ``<tool_response>``, so emitting the element here would nest it.
+    """
+    return f"[tool result: {name}]\n{output}"
 
 
 class RenderedChat(BaseModel):
@@ -152,6 +164,32 @@ def to_chat_messages(
     return chat
 
 
+def _encode(tokenizer: Tokenizer, messages: Sequence[ChatMessage]) -> list[int]:
+    """Render and tokenize a conversation with the model's chat template."""
+    return tokenizer.encode(tokenizer.apply_chat_template(list(messages)), add_special_tokens=False)
+
+
+def _group_boundaries(messages: Sequence[ChatMessage]) -> list[int]:
+    """Indices that split the conversation at append-only template boundaries.
+
+    Qwen-style templates coalesce a run of consecutive ``tool`` turns into a
+    single ``<tool_response>`` block, so the boundary between two tool turns is
+    not between two template blocks. A run of tool turns shares one trained
+    flag, so treating it as one group loses nothing and restores prefix
+    stability.
+    """
+    boundaries = [0]
+    index = 0
+    while index < len(messages):
+        end = index + 1
+        if messages[index].role == "tool":
+            while end < len(messages) and messages[end].role == "tool":
+                end += 1
+        boundaries.append(end)
+        index = end
+    return boundaries
+
+
 def render_chat(
     tokenizer: Tokenizer,
     messages: Sequence[ChatMessage],
@@ -159,29 +197,71 @@ def render_chat(
 ) -> RenderedChat:
     """Tokenize ``messages`` and mask every token not in a trained message.
 
-    The template is applied incrementally: each step re-renders the prefix and
-    keeps only the newly appended tokens. This is correct for prefix-stable,
-    append-only templates (ChatML, Llama, Qwen). The prefix is verified on every
-    step, so a template that coalesces or rewrites earlier text raises instead of
-    silently attaching a mask to the wrong tokens. It is O(n²) in message count.
+    A template may render a message differently depending on what follows it
+    (Qwen3 gives the *last* assistant turn a thinking scaffold) and may fold
+    several messages into one block (a run of ``tool`` turns). Naive prefix
+    tokenization is therefore unsound. Instead a constant probe message is
+    appended, which makes every real message "not last"; the probe's fixed
+    rendering is stripped to recover the stable token span of each append-only
+    group. The final group is taken from the true, un-probed render so its
+    last-turn rendering is preserved. A template that rewrites earlier text
+    raises rather than mis-masking tokens.
     """
     if len(messages) != len(trained_flags):
         raise ValueError("messages and trained_flags length mismatch")
 
+    ordered = list(messages)
+    if not ordered:
+        return RenderedChat()
+
+    probe_ids = _encode(tokenizer, [_STABILITY_PROBE])
+    probe_length = len(probe_ids)
+
+    full = _encode(tokenizer, ordered)
+    boundaries = _group_boundaries(ordered)
+
+    # stable[b] is the rendering of ``ordered[:b]`` with the probe appended and
+    # then removed: the append-only token sequence for the first ``b`` messages.
+    stable: dict[int, list[int]] = {}
+    for boundary in boundaries:
+        with_probe = _encode(tokenizer, [*ordered[:boundary], _STABILITY_PROBE])
+        if with_probe[-probe_length:] != probe_ids:
+            raise ValueError(
+                "chat template is not prefix-stable: the probe message did not "
+                "render as a fixed trailing block, so the training mask cannot "
+                "be trusted"
+            )
+        stable[boundary] = with_probe[: len(with_probe) - probe_length]
+
     input_ids: list[int] = []
     assistant_mask: list[bool] = []
-    previous_length = 0
-    for index, _message in enumerate(messages):
-        rendered = tokenizer.apply_chat_template(list(messages[: index + 1]))
-        current = tokenizer.encode(rendered, add_special_tokens=False)
-        if previous_length and current[:previous_length] != input_ids:
-            raise ValueError(
-                "chat template is not prefix-stable: tokenizing a longer prefix "
-                "changed earlier tokens, so the training mask cannot be trusted"
-            )
-        appended = current[previous_length:]
-        input_ids.extend(appended)
-        assistant_mask.extend([bool(trained_flags[index])] * len(appended))
-        previous_length = len(current)
+    for group in range(len(boundaries) - 1):
+        start = boundaries[group]
+        end = boundaries[group + 1]
+        prefix = stable[start]
+        if end < len(ordered):
+            extended = stable[end]
+            if extended[: len(prefix)] != prefix:
+                raise ValueError(
+                    "chat template is not prefix-stable: tokenizing a longer "
+                    "prefix changed earlier tokens, so the training mask cannot "
+                    "be trusted"
+                )
+            block = extended[len(prefix) :]
+        else:
+            if full[: len(prefix)] != prefix:
+                raise ValueError(
+                    "chat template is not prefix-stable: the final message's "
+                    "context changed when it became last"
+                )
+            block = full[len(prefix) :]
+        input_ids.extend(block)
+        assistant_mask.extend([bool(trained_flags[start])] * len(block))
+
+    if input_ids != full:
+        raise ValueError(
+            "chat template is not prefix-stable: the per-message spans do not "
+            "reconstruct the full conversation"
+        )
 
     return RenderedChat(input_ids=input_ids, assistant_mask=assistant_mask)

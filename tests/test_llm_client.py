@@ -10,7 +10,13 @@ import pytest
 from frictiontune.config.models import LlmRoleConfig, RoleName
 from frictiontune.core.cache import ContentCache
 from frictiontune.core.retry import RetryPolicy
-from frictiontune.llm.client import LlmClient, _message_text, build_response_format
+from frictiontune.llm.client import (
+    LlmClient,
+    _message_text,
+    _reasoning_text,
+    base_urls,
+    build_response_format,
+)
 from frictiontune.llm.messages import ChatMessage
 from frictiontune.llm.transport import TRANSPORT_RETRYABLE
 from openai import (
@@ -214,3 +220,115 @@ def test_message_text_concatenates_content_part_lists() -> None:
 def test_message_text_degrades_unrecognised_content_to_empty() -> None:
     assert _message_text(SimpleNamespace(content=None)) == ""
     assert _message_text(SimpleNamespace(content={"unexpected": True})) == ""
+
+
+def test_reasoning_text_captures_the_provider_stream() -> None:
+    assert _reasoning_text(SimpleNamespace(reasoning_content="step 1")) == "step 1"
+    assert _reasoning_text(SimpleNamespace(reasoning_content=None)) == ""
+    assert _reasoning_text(SimpleNamespace(content="answer")) == ""
+
+
+async def test_client_forwards_extra_body_to_the_provider(tmp_path: Path) -> None:
+    completions = _CapturingCompletions(_completion())
+    client = LlmClient(ContentCache(tmp_path))
+    config = LlmRoleConfig(
+        model="m",
+        cache=False,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    endpoint = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    client._sdk[("", "EMPTY", config.timeout_s)] = cast("AsyncOpenAI", endpoint)
+
+    await client.complete(RoleName.COMPACTOR, config, [ChatMessage.user("hi")])
+
+    assert completions.calls[0]["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+
+
+async def test_client_omits_extra_body_when_empty(tmp_path: Path) -> None:
+    completions = _CapturingCompletions(_completion())
+    client, config = _capturing_client(tmp_path, completions)
+
+    await client.complete(RoleName.TARGET, config, [ChatMessage.user("hi")])
+
+    assert completions.calls[0]["extra_body"] is None
+
+
+def test_extra_body_participates_in_the_cache_key(tmp_path: Path) -> None:
+    client = LlmClient(ContentCache(tmp_path))
+
+    def key(extra_body: dict[str, object]) -> str:
+        config = LlmRoleConfig(model="m", extra_body=extra_body)
+        return client._cache_key(
+            RoleName.COMPACTOR,
+            config,
+            [ChatMessage.user("hi")],
+            None,
+            None,
+            force_json=True,
+            schema_name="response",
+            seed=None,
+        )
+
+    assert key({}) != key({"chat_template_kwargs": {"enable_thinking": False}})
+
+
+async def test_client_captures_reasoning_content(tmp_path: Path) -> None:
+    completion = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content='{"ok":true}', reasoning_content="because"),
+                finish_reason="stop",
+            )
+        ],
+        model="m",
+        usage=None,
+    )
+    completions = _CapturingCompletions(completion)
+    client, config = _capturing_client(tmp_path, completions)
+
+    response = await client.complete(RoleName.FRICTION_ANALYST, config, [ChatMessage.user("hi")])
+
+    assert response.text == '{"ok":true}'
+    assert response.reasoning == "because"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, ("",)),
+        ("", ("",)),
+        (" , ", ("",)),
+        ("http://a:8000/v1", ("http://a:8000/v1",)),
+        ("http://a:8000/v1/, http://b:8010/v1", ("http://a:8000/v1", "http://b:8010/v1")),
+    ],
+)
+def test_base_urls_normalises_a_replica_list(raw: str | None, expected: tuple[str, ...]) -> None:
+    assert base_urls(LlmRoleConfig(model="m", base_url=raw)) == expected
+
+
+async def test_client_fans_out_across_replicas_round_robin(tmp_path: Path) -> None:
+    client = LlmClient(ContentCache(tmp_path))
+    config = LlmRoleConfig(model="m", base_url="http://a:8000/v1, http://b:8010/v1")
+
+    first = client._endpoint(RoleName.TARGET, config)
+    second = client._endpoint(RoleName.TARGET, config)
+    third = client._endpoint(RoleName.TARGET, config)
+
+    assert first is not second
+    assert first is third
+    assert set(client._sdk) == {
+        ("http://a:8000/v1", "EMPTY", config.timeout_s),
+        ("http://b:8010/v1", "EMPTY", config.timeout_s),
+    }
+    await client.aclose()
+
+
+async def test_client_single_endpoint_is_unchanged(tmp_path: Path) -> None:
+    client = LlmClient(ContentCache(tmp_path))
+    config = LlmRoleConfig(model="m", base_url="http://a:8000/v1")
+
+    assert client._endpoint(RoleName.TARGET, config) is client._endpoint(RoleName.TARGET, config)
+    assert set(client._sdk) == {("http://a:8000/v1", "EMPTY", config.timeout_s)}
+    await client.aclose()

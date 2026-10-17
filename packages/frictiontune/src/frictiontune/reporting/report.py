@@ -88,6 +88,7 @@ def render_friction_report(profile: FrictionProfile) -> str:
         f"({profile.coverage() * 100:.1f}%)",
         f"- total events: {profile.total_events}",
         f"- abstentions: {profile.abstentions}",
+        f"- unanalysed episodes: {profile.unanalysed}",
         "",
     ]
     lines.append(_counter_table("By form", profile.by_form))
@@ -106,11 +107,10 @@ def render_dashboard(dashboard: ReplayDashboard) -> str:
         "",
         f"- episodes: {dashboard.episodes}",
         f"- seeds: {', '.join(str(seed) for seed in dashboard.seeds)}",
-        f"- lucky-pass rate: {dashboard.lucky_pass_rate * 100:.1f}%",
-        "",
-        "## Signals",
-        "",
     ]
+    if dashboard.lucky_pass_rate is not None:
+        lines.append(f"- lucky-pass rate: {dashboard.lucky_pass_rate * 100:.1f}%")
+    lines += ["", "## Signals", ""]
     rows = [
         [
             signal.name,

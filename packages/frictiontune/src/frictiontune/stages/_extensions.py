@@ -100,7 +100,7 @@ class ReduceSettings(StageSettings):
 
     min_chars: int = 40_000
     chunk_turns: int = Field(default=40, ge=1)
-    batch_size: int = 16
+    max_transcript_chars: int = 60_000
 
 
 class Reduce(Stage):
@@ -110,6 +110,7 @@ class Reduce(Stage):
         name="reduce",
         tier=Tier.C,
         requires_llm=True,
+        prompts=["reduce"],
         lead=_EXT,
         roi="Medium",
         justification=(
@@ -143,7 +144,7 @@ class Reduce(Stage):
                 "start_turn": start,
                 "end_turn": end,
                 "char_count": sum(len(message.content_text()) for message in chunk),
-                "transcript": render_transcript(chunk),
+                "transcript": clip(render_transcript(chunk), settings.max_transcript_chars),
             },
             ReduceSummary,
         )
@@ -191,7 +192,6 @@ class Reduce(Stage):
 class AttributeSettings(StageSettings):
     """Knobs for root-cause attribution."""
 
-    batch_size: int = 32
     max_transcript_chars: int = 100_000
 
 
@@ -202,6 +202,7 @@ class Attribute(Stage):
         name="attribute",
         tier=Tier.C,
         requires_llm=True,
+        prompts=["attribution"],
         lead=_EXT,
         roi="Medium",
         justification=(
@@ -272,6 +273,7 @@ class FrictionClusterSettings(StageSettings):
     """Knobs for behaviour clustering."""
 
     max_events: int = 400
+    max_events_chars: int = 12_000
 
 
 class FrictionCluster(Stage):
@@ -281,6 +283,7 @@ class FrictionCluster(Stage):
         name="friction_cluster",
         tier=Tier.C,
         requires_llm=True,
+        prompts=["friction_cluster"],
         lead=_EXT,
         roi="Medium",
         justification=(
@@ -317,7 +320,7 @@ class FrictionCluster(Stage):
                 RoleName.FRICTION_ANALYST,
                 role,
                 "friction_cluster",
-                {"events": self._render(events)},
+                {"events": clip(self._render(events), settings.max_events_chars)},
                 FrictionClusters,
             )
             known = {event.id for event in events}
@@ -357,6 +360,7 @@ class SynthesizeSettings(StageSettings):
     per_dimension: int = 8
     max_dimensions: int = 10
     seeds_per_dimension: int = 5
+    max_seeds_chars: int = 12_000
 
 
 class Synthesize(Stage):
@@ -366,6 +370,7 @@ class Synthesize(Stage):
         name="synthesize",
         tier=Tier.C,
         requires_llm=True,
+        prompts=["synthesize"],
         lead=_EXT,
         roi="Medium",
         justification=(
@@ -412,7 +417,8 @@ class Synthesize(Stage):
                     "dimension": dimension.dimension or dimension.name,
                     "target_behavior": dimension.target_behavior,
                     "count": settings.per_dimension,
-                    "seeds": "\n\n---\n\n".join(seed_texts) or "(no seeds available)",
+                    "seeds": clip("\n\n---\n\n".join(seed_texts), settings.max_seeds_chars)
+                    or "(no seeds available)",
                 },
                 SyntheticBatch,
             )
@@ -715,6 +721,7 @@ class EvaluateSimUser(Stage):
         name="evaluate_sim_user",
         tier=Tier.C,
         requires_llm=True,
+        prompts=["user_simulator"],
         lead=_EXT,
         roi="Medium",
         justification=(
@@ -844,6 +851,8 @@ class EvaluateExternal(Stage):
         name="evaluate_external",
         tier=Tier.C,
         requires_llm=True,
+        uses_evaluation=True,
+        prompts=["judge"],
         lead=_EXT,
         roi="Medium",
         justification=(

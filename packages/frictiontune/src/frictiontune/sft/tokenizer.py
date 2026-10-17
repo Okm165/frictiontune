@@ -140,9 +140,9 @@ class HuggingFaceTokenizer:
         templates read them for tool/function messages, and dropping them can
         make a real template fail or mis-render the turn.
         """
-        payload: list[dict[str, object]] = []
+        payload: list[dict[str, str]] = []
         for message in messages:
-            entry: dict[str, object] = {"role": message.role, "content": message.content}
+            entry: dict[str, str] = {"role": message.role, "content": message.content}
             if message.name is not None:
                 entry["name"] = message.name
             if message.tool_call_id is not None:

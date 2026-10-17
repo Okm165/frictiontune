@@ -1,0 +1,19 @@
+# Build context = repository root: `podman build -f container/Containerfile .`
+# Keep source and the container assets; drop the heavy, machine-local trees the
+# image never needs (they are bind-mounted at run time instead).
+.git
+.venv
+.venv-container
+.toolchain
+.cache
+.config
+.context
+artifacts
+journal
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+.ruff_cache
+.mypy_cache
+.pytest_cache
+*.log

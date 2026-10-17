@@ -1,0 +1,323 @@
+# syntax=docker/dockerfile:1.7
+# =============================================================================
+# frictiontune — container cascade
+# -----------------------------------------------------------------------------
+# One Containerfile, one image per pipeline, built as a *cascade* so every heavy
+# layer is created exactly once and inherited. A shared OS layer forks into two
+# branches — the Python pipeline chain and the inference server:
+#
+#     os ──▶ base ──▶ data ──▶ train ──▶ serve
+#                         └──▶ dev
+#        └──▶ llm
+#
+#   os     shared OS + build tools (+ the vendor GPU userspace)
+#   base   adds uv and an isolated /opt/venv (still no pipeline deps)
+#   data   the CPU/network pipeline (`frictiontune`): ingest → … → build_sft
+#   train  adds a PyTorch stack + `frictiontune-train`: train_sft, eval
+#   serve  adds aiohttp and the OpenAI-compatible replay server (target/adapter)
+#   dev    adds ruff/mypy/pytest for the four quality gates
+#   llm    an inference server (llama.cpp) for the analyst/judge/teacher roles —
+#          the fully-local alternative to a hosted OpenAI-compatible endpoint
+#
+# Build any pipeline image by selecting its stage with `--target`:
+#
+#     podman build -f container/Containerfile --target data  -t frictiontune:data  .
+#     podman build -f container/Containerfile --target train -t frictiontune:train .
+#     podman build -f container/Containerfile --target serve -t frictiontune:serve .
+#     podman build -f container/Containerfile --target dev   -t frictiontune:dev   .
+#     podman build -f container/Containerfile --target llm   -t frictiontune:llm   .
+#
+# -----------------------------------------------------------------------------
+# HARDWARE: the same file builds for AMD (ROCm) and NVIDIA (CUDA)
+# -----------------------------------------------------------------------------
+# The defaults below are ROCm. Every one is an ARG, so an NVIDIA host builds the
+# identical cascade by swapping the vendor set (see container/README.md and
+# `container/make-variant.mk` for the canned NVIDIA invocation):
+#
+#   --build-arg OS_IMAGE=nvidia/cuda:12.6.1-cudnn-devel-ubuntu24.04
+#   --build-arg VARIANT=cuda
+#   --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cu126
+#   --build-arg TORCH_VERSION=2.10.0
+#   --build-arg TORCH_EXTRA_PACKAGES=
+#   --build-arg GGML_BACKEND=CUDA
+#   --build-arg GGML_EXTRA_ARGS=-DCMAKE_CUDA_ARCHITECTURES=89
+#
+# Every input is an ARG below (override with `--build-arg NAME=value`); the
+# resolved set is written to /opt/frictiontune/build-args.txt inside each image
+# and to the OCI labels, so an image is self-describing.
+#
+# The image owns the *toolchain*; the repository is bind-mounted at /work at run
+# time and its `packages/*/src` shadow the baked install (see entrypoint.sh), so
+# pipeline code stays live without a rebuild while the expensive wheels do not.
+# See container/README.md for the pod layout and run recipes.
+# =============================================================================
+
+# --- exported vendor arguments (ROCm defaults) -------------------------------
+# VARIANT picks the default TORCH_*/GGML_* sets below; OS_IMAGE is the vendor OS
+# parent. ROCm needs the extra `+rocm` torch build and `triton-rocm`; CUDA takes
+# the stock CUDA wheels and no separate Triton.
+ARG VARIANT=rocm
+
+# AMD ROCm 7.0 userspace parent (Ubuntu-based).
+ARG ROCM_IMAGE=docker.io/rocm/dev-ubuntu-24.04:7.0-complete
+# NVIDIA CUDA parent (Ubuntu-based); swap with `--build-arg OS_IMAGE=$CUDA_IMAGE`.
+ARG CUDA_IMAGE=nvidia/cuda:12.6.1-cudnn-devel-ubuntu24.04
+ARG OS_IMAGE=docker.io/rocm/dev-ubuntu-24.04:7.0-complete
+
+# --- exported build arguments ------------------------------------------------
+ARG PYTHON_VERSION=3.12
+ARG UV_VERSION=0.13.0
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.0
+# PyTorch wheel index + versions. ROCm: the +rocm wheel from the ROCm index plus
+# a separate `triton-rocm`. CUDA: stock wheels from the CUDA index, no Triton
+# package (torch bundles it).
+ARG TORCH_INDEX=https://download.pytorch.org/whl/rocm7.0
+ARG TORCH_VERSION=2.10.0+rocm7.0
+ARG TORCH_EXTRA_PACKAGES=triton-rocm==3.6.0
+ARG TRANSFORMERS_VERSION=5.19.0
+ARG TRL_VERSION=1.15.0
+ARG PEFT_VERSION=0.21.2
+ARG DATASETS_VERSION=5.1.0
+ARG ACCELERATE_VERSION=1.15.0
+ARG BITSANDBYTES_VERSION=0.50.2
+ARG SENTENCEPIECE_VERSION=0.2.2
+ARG PYPI_INDEX=https://pypi.org/simple
+# AMD RDNA3 (RX 7900 XTX / Navi 31) is gfx1100; RDNA2 is gfx1030, CDNA is
+# gfx90a/gfx942. Set to a `;`-separated list for a mixed box. Only used when the
+# backend is HIP.
+ARG AMDGPU_TARGETS=gfx1100
+# llama.cpp (llm image) backend + its extra CMake flags. HIP needs the ROCm
+# prefix and the GPU targets; CUDA needs the CUDA architectures. Defaults are
+# the ROCm set.
+ARG GGML_BACKEND=HIP
+ARG GGML_EXTRA_ARGS=-DAMDGPU_TARGETS=gfx1100 -DCMAKE_PREFIX_PATH=/opt/rocm
+ARG LLAMA_CPP_REF=master
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+
+
+# =============================================================================
+# os — shared OS layer: the vendor GPU userspace, build tools, git
+# =============================================================================
+FROM ${OS_IMAGE} AS os
+ARG OS_IMAGE VARIANT
+LABEL org.opencontainers.image.title="frictiontune os" \
+      org.opencontainers.image.description="Shared OS layer for the frictiontune cascade" \
+      com.frictiontune.variant="${VARIANT}"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    TOKENIZERS_PARALLELISM=false
+
+# git is required by `code_revision` (the run-id manifest shells out to it), and
+# the mounted repo is owned by the host user, so mark it safe up front.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git jq \
+ && rm -rf /var/lib/apt/lists/* \
+ && git config --system --add safe.directory /work
+
+RUN mkdir -p /opt/frictiontune \
+ && { \
+      echo "OS_IMAGE=${OS_IMAGE}"; \
+      echo "VARIANT=${VARIANT}"; \
+    } > /opt/frictiontune-base.env
+
+
+# =============================================================================
+# uvbin — a scratch stage carrying only the pinned uv static binary
+# =============================================================================
+FROM ${UV_IMAGE} AS uvbin
+
+
+# =============================================================================
+# base — adds uv and an isolated virtualenv (no pipeline deps yet)
+# =============================================================================
+FROM os AS base
+ARG PYTHON_VERSION UV_VERSION
+LABEL org.opencontainers.image.title="frictiontune base" \
+      org.opencontainers.image.description="Shared Python/uv base for the frictiontune Python pipeline"
+
+# Keep pip/uv quiet and deterministic; put the virtualenv first on PATH so bare
+# `python`, `pip` and `uv pip` all act on /opt/venv rather than the system one.
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_PREFERENCE=only-system \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin
+
+# Take uv as a static binary instead of pip-installing it: the distro Python is
+# externally managed (PEP 668), and a pinned binary is both cleaner and faster.
+COPY --from=uvbin /uv /uvx /usr/local/bin/
+RUN uv --version \
+ && uv venv --python "${PYTHON_VERSION}" /opt/venv \
+ && uv pip install --python /opt/venv/bin/python -U pip setuptools wheel
+
+
+# =============================================================================
+# data — the CPU/network pipeline: ingest … curate, rules, build_sft
+# =============================================================================
+FROM base AS data
+ARG PYTHON_VERSION UV_VERSION HOST_UID HOST_GID
+LABEL org.opencontainers.image.title="frictiontune data" \
+      org.opencontainers.image.description="CPU/LLM pipeline (no GPU) — ingest, normalize, mine, judge, rules, build_sft"
+
+COPY packages/frictiontune /src/frictiontune
+RUN uv pip install --python /opt/venv/bin/python /src/frictiontune
+
+COPY container/entrypoint.sh /usr/local/bin/ft-cli
+RUN chmod +x /usr/local/bin/ft-cli
+
+# Record the resolved build arguments *inside* the image so `podman inspect` or
+# `cat /opt/frictiontune/build-args.txt` documents exactly what was baked.
+RUN { cat /opt/frictiontune-base.env; \
+      echo "target=data"; \
+      echo "PYTHON_VERSION=${PYTHON_VERSION}"; \
+      echo "UV_VERSION=${UV_VERSION}"; \
+      echo "HOST_UID=${HOST_UID}"; \
+      echo "HOST_GID=${HOST_GID}"; \
+    } > /opt/frictiontune/build-args.txt
+
+WORKDIR /work
+ENTRYPOINT ["/usr/local/bin/ft-cli"]
+
+
+# =============================================================================
+# train — the GPU pipeline: adds PyTorch and `frictiontune-train`
+# =============================================================================
+FROM data AS train
+ARG TORCH_INDEX TORCH_VERSION TORCH_EXTRA_PACKAGES TRANSFORMERS_VERSION TRL_VERSION \
+    PEFT_VERSION DATASETS_VERSION ACCELERATE_VERSION BITSANDBYTES_VERSION \
+    SENTENCEPIECE_VERSION PYPI_INDEX
+LABEL org.opencontainers.image.title="frictiontune train" \
+      org.opencontainers.image.description="GPU pipeline: QLoRA SFT (train_sft), replay evaluation and adapter export"
+
+# The vendor index carries the vendor wheels (e.g. +rocm7.0); `unsafe-best-match`
+# lets it win over PyPI's same-version build for the other vendor instead of
+# sorting by version alone. TORCH_EXTRA_PACKAGES is empty for CUDA.
+# shellcheck disable=SC2086
+RUN uv pip install --python /opt/venv/bin/python \
+      "torch==${TORCH_VERSION}" \
+      ${TORCH_EXTRA_PACKAGES} \
+      "transformers==${TRANSFORMERS_VERSION}" \
+      "trl==${TRL_VERSION}" \
+      "peft==${PEFT_VERSION}" \
+      "datasets==${DATASETS_VERSION}" \
+      "accelerate==${ACCELERATE_VERSION}" \
+      "bitsandbytes==${BITSANDBYTES_VERSION}" \
+      "sentencepiece==${SENTENCEPIECE_VERSION}" \
+      --index-url "${TORCH_INDEX}" \
+      --extra-index-url "${PYPI_INDEX}" \
+      --index-strategy unsafe-best-match
+
+# --no-deps: the training extras are supplied above; its only hard deps
+# (`frictiontune`, `pydantic`) are already present from the `data` layer.
+# `uv build --no-sources` sidesteps the `workspace = true` source entry, which
+# only resolves inside the uv workspace, not from a lone package directory.
+COPY packages/frictiontune-train /src/frictiontune-train
+RUN uv build --wheel --no-sources --out-dir /tmp/whl /src/frictiontune-train \
+ && uv pip install --python /opt/venv/bin/python --no-deps /tmp/whl/*.whl \
+ && rm -rf /tmp/whl
+
+RUN { \
+      echo "target=train"; \
+      echo "TORCH_INDEX=${TORCH_INDEX}"; \
+      echo "TORCH_VERSION=${TORCH_VERSION}"; \
+      echo "TORCH_EXTRA_PACKAGES=${TORCH_EXTRA_PACKAGES}"; \
+      echo "TRANSFORMERS_VERSION=${TRANSFORMERS_VERSION}"; \
+      echo "TRL_VERSION=${TRL_VERSION}"; \
+      echo "PEFT_VERSION=${PEFT_VERSION}"; \
+      echo "DATASETS_VERSION=${DATASETS_VERSION}"; \
+      echo "ACCELERATE_VERSION=${ACCELERATE_VERSION}"; \
+      echo "BITSANDBYTES_VERSION=${BITSANDBYTES_VERSION}"; \
+      echo "SENTENCEPIECE_VERSION=${SENTENCEPIECE_VERSION}"; \
+    } >> /opt/frictiontune/build-args.txt
+
+ENTRYPOINT ["/usr/local/bin/ft-cli"]
+
+
+# =============================================================================
+# serve — OpenAI-compatible replay servers for the `target`/`adapter` roles
+# =============================================================================
+FROM train AS serve
+ARG UV_VERSION
+LABEL org.opencontainers.image.title="frictiontune serve" \
+      org.opencontainers.image.description="Local base model (+LoRA) OpenAI-compatible server for the replay stage"
+
+RUN uv pip install --python /opt/venv/bin/python "aiohttp>=3.9"
+COPY scripts/ops/serve_openai.py /opt/frictiontune/serve_openai.py
+COPY container/serve-entrypoint.sh /usr/local/bin/ft-serve
+RUN chmod +x /usr/local/bin/ft-serve
+
+# 8100 = base model, 8101 = adapter; both bind the loopback of the shared pod
+# network namespace so the pipeline reaches them at 127.0.0.1.
+EXPOSE 8100 8101
+ENTRYPOINT ["/usr/local/bin/ft-serve"]
+
+
+# =============================================================================
+# dev — the quality gates (ruff, format, mypy, pytest)
+# =============================================================================
+FROM train AS dev
+ARG UV_VERSION
+LABEL org.opencontainers.image.title="frictiontune dev" \
+      org.opencontainers.image.description="train + ruff/mypy/pytest for the four quality gates"
+
+RUN uv pip install --python /opt/venv/bin/python \
+      "ruff>=0.9" "mypy>=1.11" "types-PyYAML>=6.0" "pytest>=8.2" "pytest-asyncio>=0.23"
+
+ENTRYPOINT ["/usr/local/bin/ft-cli"]
+
+
+# =============================================================================
+# llm — a llama.cpp server for the analyst/judge/teacher roles
+# -----------------------------------------------------------------------------
+# This is the fully-local path: point the pipeline's roles at it and the run
+# stops depending on any hosted endpoint. It branches off the shared `os` layer,
+# so it shares the OS/GPU userspace but carries none of the Python pipeline
+# weight. GGML_BACKEND selects HIP (AMD) or CUDA (NVIDIA); GGML_EXTRA_ARGS
+# carries the vendor-specific arch/prefix flags.
+# =============================================================================
+FROM os AS llm
+ARG OS_IMAGE GGML_BACKEND GGML_EXTRA_ARGS LLAMA_CPP_REF HOST_UID HOST_GID
+LABEL org.opencontainers.image.title="frictiontune llm" \
+      org.opencontainers.image.description="llama.cpp server for local analyst/judge/teacher inference" \
+      com.frictiontune.ggml-backend="${GGML_BACKEND}"
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake ninja-build pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+
+# Build only the server target; the backend compiles against the vendor userspace
+# already present in the OS layer. LLAMA_CURL=OFF: the binary need not fetch
+# models. GGML_EXTRA_ARGS is intentionally word-split, so it is left unquoted.
+# shellcheck disable=SC2086
+RUN git clone --depth 1 --branch "${LLAMA_CPP_REF}" \
+      https://github.com/ggml-org/llama.cpp /src/llama.cpp \
+ && cmake -S /src/llama.cpp -B /src/llama.cpp/build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DGGML_${GGML_BACKEND}=ON \
+      ${GGML_EXTRA_ARGS} \
+      -DLLAMA_CURL=OFF \
+      -DLLAMA_BUILD_TESTS=OFF \
+ && cmake --build /src/llama.cpp/build --target llama-server -j"$(nproc)" \
+ && install -m 0755 /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server \
+ && rm -rf /src/llama.cpp/build/CMakeFiles
+
+COPY container/llm-entrypoint.sh /usr/local/bin/ft-llm
+RUN chmod +x /usr/local/bin/ft-llm
+
+RUN { cat /opt/frictiontune-base.env; \
+      echo "target=llm"; \
+      echo "GGML_BACKEND=${GGML_BACKEND}"; \
+      echo "GGML_EXTRA_ARGS=${GGML_EXTRA_ARGS}"; \
+      echo "LLAMA_CPP_REF=${LLAMA_CPP_REF}"; \
+    } > /opt/frictiontune/build-args.txt
+
+# The OpenAI-compatible endpoint the pipeline's `analyst`/`judge`/`teacher`
+# roles expect. Point FRICTIONTUNE_LLM_BASE_URL at http://<host>:8000/v1.
+EXPOSE 8000
+ENTRYPOINT ["/usr/local/bin/ft-llm"]

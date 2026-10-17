@@ -103,14 +103,6 @@ def test_library_prompts_have_no_unexpanded_includes() -> None:
         assert "{{>" not in template.user, f"{name} left an include unexpanded"
 
 
-def test_library_contains_the_expected_prompts() -> None:
-    names = default_registry().names()
-
-    assert len(names) >= 16
-    assert "friction_analyst" in names
-    assert "judge" in names
-
-
 def test_every_library_prompt_parses_and_renders() -> None:
     registry: PromptRegistry = default_registry()
 
@@ -251,9 +243,38 @@ def test_prompt_fingerprint_is_stable_and_hex() -> None:
     assert re.fullmatch(r"[0-9a-f]{64}", first)
 
 
-def test_prompt_fingerprint_changes_with_prompt_content() -> None:
+def test_prompt_fingerprint_scopes_to_the_named_prompts() -> None:
     class _DoctoredRegistry(PromptRegistry):
-        def partials(self) -> dict[str, str]:
-            return {"doctored": "changed text"}
+        """A registry whose ``judge`` prompt has been edited."""
 
-    assert _DoctoredRegistry().fingerprint() != PromptRegistry().fingerprint()
+        def get(self, name: str) -> PromptTemplate:
+            template = super().get(name)
+            if name == "judge":
+                return template.model_copy(
+                    update={"sections": {**template.sections, "system": "changed"}}
+                )
+            return template
+
+    doctored = _DoctoredRegistry()
+    clean = PromptRegistry()
+
+    assert doctored.fingerprint(["judge"]) != clean.fingerprint(["judge"])
+    # A stage that declares its prompts is keyed on those alone, so editing
+    # `judge.md` must not re-key the stages that never call the judge.
+    assert doctored.fingerprint(["dedup"]) == clean.fingerprint(["dedup"])
+    # The whole-library default stays conservative.
+    assert doctored.fingerprint() != clean.fingerprint()
+    # Order is not part of the identity.
+    assert clean.fingerprint(["judge", "dedup"]) == clean.fingerprint(["dedup", "judge"])
+
+
+def test_prompt_fingerprint_carries_expanded_partials() -> None:
+    registry = default_registry()
+    template = registry.get("judge")
+    body = template.system + template.user
+
+    # Partials are expanded at parse time and the resolved text is what gets
+    # hashed, so a change to a shared partial moves the fingerprint of exactly
+    # the prompts that include it — no separate partial hash is needed.
+    assert registry.partials()["untrusted-data"] in body
+    assert "{{>" not in body

@@ -45,6 +45,9 @@ ignore = [
 "**/tests/**" = ["ANN", "D", "S101"]
 "**/__init__.py" = ["F401"]
 "**/stages/_extensions.py" = ["D"]
+# Operator scripts are CLIs: printing to stdout is their interface, and their
+# modules mix many small helpers where full docstring coverage adds no signal.
+"**/scripts/**" = ["T201", "D"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

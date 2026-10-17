@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from frictiontune.domain.trace import DomainModel
 from frictiontune.domain.types import NonNegativeInt, Probability
@@ -28,13 +28,18 @@ class EvidenceSpan(DomainModel):
 
 
 class FrictionEventDraft(DomainModel):
-    """Agent response: one friction occurrence before id assignment."""
+    """Agent response: one friction occurrence before axes and id are derived.
 
-    form: str
-    cause: str
+    The analyst chooses the ``leaf`` — the one semantic judgment — plus cost,
+    resolution, evidence, and confidence. ``form`` and ``cause`` are *not* asked
+    for: each leaf fixes them in the taxonomy, so the plumbing derives them from
+    the leaf rather than trusting (and then rejecting) a model restatement of a
+    declared mapping.
+    """
+
+    leaf: str
     cost: str
     resolution: Resolution
-    leaf: str
     summary: str = ""
     evidence: list[EvidenceSpan] = Field(min_length=1)
     confidence: Probability
@@ -46,6 +51,8 @@ class FrictionEvent(FrictionEventDraft):
     id: str
     episode_id: str
     ensemble_votes: int = 1
+    form: str
+    cause: str
 
 
 class FrictionAnalysis(DomainModel):
@@ -67,6 +74,11 @@ class FrictionProfile(DomainModel):
     by_leaf: dict[str, int] = Field(default_factory=dict)
     by_resolution: dict[str, int] = Field(default_factory=dict)
     abstentions: int = 0
+    # Episodes the analyst could not be judged on at all — every ensemble pass
+    # failed, so the vote could not be held. They are counted here rather than
+    # folded into `episodes_analysed`, so coverage stays a statement about the
+    # episodes that *were* analysed and a bad run cannot look like a clean one.
+    unanalysed: int = 0
 
     def coverage(self) -> float:
         """Fraction of analysed episodes that contained at least one event."""
@@ -76,12 +88,19 @@ class FrictionProfile(DomainModel):
 
 
 class RecoverySpan(DomainModel):
-    """Agent response: the recovery span within a friction episode."""
+    """Agent response: the recovery span within a friction episode.
+
+    ``recovery_start`` and ``recovery_end`` have no default so the generated
+    JSON schema marks them *required*: the model must always emit both keys (a
+    nullable value is allowed when ``found`` is false). Leaving them optional
+    let the endpoint omit ``recovery_end`` on a single-turn recovery, which
+    silently discarded every candidate downstream. The validator makes an
+    omitted span a schema-repair error instead of a silent skip.
+    """
 
     found: bool
-    failure_turn: NonNegativeInt | None = None
-    recovery_start: NonNegativeInt | None = None
-    recovery_end: NonNegativeInt | None = None
+    recovery_start: NonNegativeInt | None
+    recovery_end: NonNegativeInt | None
     trigger: RecoveryTrigger = "none"
     rationale: str = ""
 
@@ -93,3 +112,10 @@ class RecoverySpan(DomainModel):
         if value is not None and start is not None and value < start:
             raise ValueError("recovery_end must be >= recovery_start")
         return value
+
+    @model_validator(mode="after")
+    def _span_present_when_found(self) -> RecoverySpan:
+        """Require a concrete span whenever the agent claims a recovery."""
+        if self.found and (self.recovery_start is None or self.recovery_end is None):
+            raise ValueError("recovery_start and recovery_end are required when found is true")
+        return self

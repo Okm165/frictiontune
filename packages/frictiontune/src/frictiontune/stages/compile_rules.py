@@ -9,7 +9,6 @@ deterministically and their evidence unioned.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 
 from frictiontune.config.models import RoleName
@@ -21,6 +20,7 @@ from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 from frictiontune.stages.common import (
     clip,
+    gather_tolerant,
     read_events_by_episode,
     read_tool_schemas,
     render_transcript,
@@ -42,6 +42,10 @@ class CompileRulesSettings(StageSettings):
     batch_size: int = 32
     max_transcript_chars: int = 100_000
     max_rules_per_episode: int = 8
+    # Bound on the tool-schema block. The schemas are shared across episodes and
+    # joined verbatim; on a corpus with many tools that prompt can exceed a slot,
+    # and the episode would be silently skipped.
+    max_schema_chars: int = 8_000
 
 
 def _render_friction(events: list[FrictionEvent]) -> str:
@@ -62,6 +66,8 @@ class CompileRules(Stage):
         name="compile_rules",
         tier=Tier.A,
         requires_llm=True,
+        prompts=["rule_compiler"],
+        roles=[RoleName.RULE_COMPILER],
         lead=Lead.CORE,
         roi="Very High",
         justification=(
@@ -92,7 +98,11 @@ class CompileRules(Stage):
             {
                 "friction": _render_friction(shown),
                 "context": clip(render_transcript(episode.messages), settings.max_transcript_chars),
-                "tool_schemas": "\n".join(dumps(schema) for schema in schemas) or "(none observed)",
+                "tool_schemas": clip(
+                    "\n".join(dumps(schema) for schema in schemas), settings.max_schema_chars
+                )
+                or "(none observed)",
+                "max_rules": settings.max_rules_per_episode,
             },
             CompiledRules,
         )
@@ -144,19 +154,26 @@ class CompileRules(Stage):
         schemas = read_tool_schemas(ctx)
         collected: list[RuntimeRule] = []
         episodes_seen = 0
+        episodes_failed = 0
         batch: list[Episode] = []
 
         async def flush() -> None:
+            nonlocal episodes_failed
             if not batch:
                 return
-            results = await asyncio.gather(
-                *(
-                    self._compile_episode(episode, grouped[episode.id], ctx, settings, schemas)
-                    for episode in batch
-                )
+            results = await gather_tolerant(
+                lambda episode: self._compile_episode(
+                    episode, grouped[episode.id], ctx, settings, schemas
+                ),
+                batch,
             )
-            for rules in results:
-                collected.extend(rules)
+            for result in results:
+                if isinstance(result, BaseException):
+                    # An episode whose rules cannot be compiled contributes no
+                    # rules; it must not take the other episodes' rules with it.
+                    episodes_failed += 1
+                    continue
+                collected.extend(result)
             batch.clear()
 
         for episode in self._episodes_with_events(ctx, grouped):
@@ -171,14 +188,16 @@ class CompileRules(Stage):
         ctx.emit_json("rules", library)
         report = {
             "episodes_compiled": episodes_seen,
+            "episodes_failed": episodes_failed,
             "rules_generated": len(collected),
             "rules_after_merge": len(rules),
         }
-        ctx.emit_json("rules_report.json", report)
+        ctx.emit_json("rules_report", report)
         ctx.emit_text(
-            "report.md",
+            "report",
             "# Compile rules\n\n"
             f"- episodes compiled: {episodes_seen}\n"
+            f"- episodes failed: {episodes_failed}\n"
             f"- rules generated: {len(collected)}\n"
             f"- rules after merge: {len(rules)}\n",
         )

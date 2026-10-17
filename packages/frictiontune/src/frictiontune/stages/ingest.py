@@ -108,10 +108,10 @@ class Ingest(Stage):
             ),
             "limit_sessions": settings.limit_sessions,
         }
-        ctx.emit_json("ingest_report.json", report)
+        ctx.emit_json("ingest_report", report)
         tool_error_pct = totals.tool_errors / totals.tool_calls * 100 if totals.tool_calls else 0.0
         ctx.emit_text(
-            "report.md",
+            "report",
             "# Ingest\n\n"
             f"- database: `{db}`\n"
             f"- sessions: {totals.sessions}\n"

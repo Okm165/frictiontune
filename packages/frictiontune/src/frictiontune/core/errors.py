@@ -53,6 +53,18 @@ class LlmSchemaError(FrictionTuneError):
     """The LLM returned output that could not be parsed into the requested schema."""
 
 
+class LlmTruncatedError(LlmError):
+    """The provider stopped at ``max_tokens`` before usable output was produced.
+
+    Distinct from a schema failure: re-asking the model cannot help when the
+    output budget itself is exhausted, which in practice happens when a
+    reasoning model spends the completion budget on chain-of-thought and emits no
+    content. It subclasses :class:`LlmError`, so callers that already catch LLM
+    failures keep working, but the gateway never feeds it to the schema-repair
+    loop, so a truncation is reported as itself rather than as "no JSON object".
+    """
+
+
 class ArtifactError(FrictionTuneError):
     """An artifact could not be read, written, or reconciled."""
 

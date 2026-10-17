@@ -27,6 +27,23 @@ class ProbeExample(BackendModel):
     expected: str | None = None
 
 
+DEFAULT_TARGET_MODULES: tuple[str, ...] = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
+"""LoRA projection targets for a standard attention/MLP transformer.
+
+One source of truth: ``fetch_base`` advertises these on the probe and
+``TrainingRequest`` defaults to them, so a probe can never name a different
+decomposition than training applies.
+"""
+
+
 class TrainingRequest(BackendModel):
     """Everything needed to run one supervised fine-tuning job."""
 
@@ -41,17 +58,7 @@ class TrainingRequest(BackendModel):
     lora_r: int = 16
     lora_alpha: int = 32
     lora_dropout: float = 0.05
-    target_modules: list[str] = Field(
-        default_factory=lambda: [
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
-        ]
-    )
+    target_modules: list[str] = Field(default_factory=lambda: list(DEFAULT_TARGET_MODULES))
     # MoE trap: an empty list prevents LoRA attaching to all experts.
     target_parameters: list[str] = Field(default_factory=list)
     resume_from: str | None = None
@@ -100,12 +107,25 @@ class ExportRequest(BackendModel):
     probe: list[ProbeExample] = Field(default_factory=list)
 
 
+class ParityMismatch(BackendModel):
+    """One probe whose merged answer differed from the adapter's.
+
+    The two texts are kept because a count alone cannot be read: a merge that
+    rounded in bf16 and a merge that is broken both show up as a mismatch, and
+    only the outputs say which one happened.
+    """
+
+    prompt: str
+    expected: str
+    actual: str
+
+
 class ParityResult(BackendModel):
     """Agreement between two model endpoints on a probe set."""
 
     total: int
     matches: int
-    mismatches: list[str] = Field(default_factory=list)
+    mismatches: list[ParityMismatch] = Field(default_factory=list)
 
     @property
     def ok(self) -> bool:

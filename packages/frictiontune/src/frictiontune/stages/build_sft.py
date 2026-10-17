@@ -35,8 +35,10 @@ class BuildSftSettings(StageSettings):
     allow_fallback_tokenizer: bool = False
     include_reasoning_context: bool = True
     train_reasoning: bool = False
-    max_seq_len: int = Field(default=8_192, ge=1)
-    batch_size: int = 64
+    # ``None`` means "use the hardware preset's ``max_seq_len``", so the records
+    # are built to the same ceiling the trainer uses. Pinning a smaller value here
+    # would window away context that training could have used (GAP-043).
+    max_seq_len: int | None = Field(default=None, ge=1)
 
 
 def _histogram_key(length: int) -> str:
@@ -54,6 +56,7 @@ def build_record(
     *,
     settings: BuildSftSettings,
     tokenizer_kind: str,
+    max_seq_len: int,
 ) -> tuple[SFTRecord, bool, int]:
     """Render one example into a tokenized record; report truncation and trained tokens."""
     context = to_chat_messages(
@@ -63,7 +66,7 @@ def build_record(
     messages = [*context, *completion]
     flags = [False] * len(context) + [message.role == "assistant" for message in completion]
     rendered = render_chat(tokenizer, messages, flags)
-    fitted = fit_and_label(rendered, settings.max_seq_len)
+    fitted = fit_and_label(rendered, max_seq_len)
     trained = sum(1 for label in fitted.labels if label != IGNORE_INDEX)
     record = SFTRecord(
         id=example.id,
@@ -101,6 +104,9 @@ class BuildSft(Stage):
     async def run(self, ctx: StageContext) -> StageResult:
         """Render every kept example and emit the SFT dataset and token report."""
         settings = ctx.settings(self.settings_model)
+        # Build to the same window the trainer uses unless a stage override is set,
+        # so a record is never windowed smaller than training can hold (GAP-043).
+        window = settings.max_seq_len or ctx.config.hardware.max_seq_len
         tokenizer, used_fallback = build_tokenizer(
             settings.tokenizer_path,
             prefer_hf=settings.prefer_hf,
@@ -124,7 +130,11 @@ class BuildSft(Stage):
             if not example.kept:
                 continue
             record, truncated, trained = build_record(
-                example, tokenizer, settings=settings, tokenizer_kind=tokenizer_kind
+                example,
+                tokenizer,
+                settings=settings,
+                tokenizer_kind=tokenizer_kind,
+                max_seq_len=window,
             )
             # A record with no trained token (e.g. a reasoning-only completion
             # when reasoning is masked) contributes no gradient and can poison a
@@ -151,7 +161,7 @@ class BuildSft(Stage):
 
         ctx.emit_json("token_stats", stats)
         ctx.emit_text(
-            "report.md",
+            "report",
             "# Build SFT\n\n"
             f"- examples: {stats.examples}\n"
             f"- skipped (no trained tokens): {skipped_empty}\n"
@@ -160,6 +170,7 @@ class BuildSft(Stage):
             f"({stats.train_ratio() * 100:.1f}%)\n"
             f"- truncated: {stats.truncated}\n"
             f"- tokenizer: {tokenizer_kind}\n"
+            f"- window: {window} tokens\n"
             f"- train reasoning: {settings.train_reasoning}\n",
         )
         notes = ["used fallback tokenizer; counts are approximate"] if used_fallback else []

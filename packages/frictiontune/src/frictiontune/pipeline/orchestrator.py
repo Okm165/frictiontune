@@ -61,20 +61,37 @@ class Orchestrator:
         stages: Sequence[str] | None = None,
         *,
         include_dependencies: bool = False,
+        cached_dependencies_only: bool = False,
     ) -> RunManifest:
-        """Run ``stages`` (or the core set) and return the run manifest."""
+        """Run ``stages`` (or the core set) and return the run manifest.
+
+        ``cached_dependencies_only`` refuses to *start* a stage that was not
+        asked for by name: every upstream stage must already have a manifest.
+        Phases that cannot host the model — training stops the llama.cpp servers
+        to free the GPUs for the job — set it, so a cold cache stops with the
+        stage's name instead of re-running an LLM stage against an endpoint that
+        is not there and retrying connection errors for as long as it is allowed
+        to.
+        """
         if stages is None:
             selected = [stage.name for stage in self.registry.core()]
         else:
             selected = list(stages)
 
+        requested = set(selected)
         order = self.graph.closure(selected) if include_dependencies else self.graph.order(selected)
         started = utc_now()
         revision = code_revision()
         entries: list[StageManifest] = []
 
         for name in order:
-            entries.append(await self._run_stage(name, revision))
+            entries.append(
+                await self._run_stage(
+                    name,
+                    revision,
+                    require_cached=cached_dependencies_only and name not in requested,
+                )
+            )
 
         finished = utc_now()
         manifest = RunManifest(
@@ -90,7 +107,9 @@ class Orchestrator:
         write_run_manifest(self.run.artifacts_root / self.run.pipeline / "manifest.json", manifest)
         return manifest
 
-    async def _run_stage(self, name: str, revision: str) -> StageManifest:
+    async def _run_stage(
+        self, name: str, revision: str, *, require_cached: bool = False
+    ) -> StageManifest:
         stage = self.registry.get(name)
         spec = stage.spec
 
@@ -115,14 +134,23 @@ class Orchestrator:
         input_hashes = self.run.catalog.hashes(consumed)
         input_hashes.extend(stage.external_input_hashes(self.run))
 
-        # The run id must change whenever *anything* that affects the stage's
-        # output changes: the whole resolved config (stage settings, role models,
-        # endpoints, temperatures, seeds), the prompt library, and the version.
-        # Hashing only the stage's own block would let an edited prompt or a
-        # changed model silently reuse a stale manifest.
+        # The run id must change whenever *anything* that affects the stage's output
+        # changes: what the stage is configured to do, the models and sampling it
+        # is bound to, the prompt library, and the version. It must *not* change
+        # when a phase merely points the same roles at the same models through
+        # different endpoints, or the stage cache would miss on every phase
+        # boundary (see RunConfig.semantic_fingerprint).
+        # A stage that calls no model depends on no model binding or prompt: giving
+        # it an empty set for both keeps its identity stable across phases. A
+        # stage that does call models but names none keeps the conservative
+        # whole-library binding.
+        declared_roles = spec.roles if spec.roles else (None if spec.requires_llm else [])
+        declared_prompts = spec.prompts if spec.prompts else (None if spec.requires_llm else [])
         config_slice = {
-            "config": self.run.config.model_dump(mode="json"),
-            "prompts": self.run.gateway.prompt_fingerprint(),
+            "config": self.run.config.semantic_fingerprint(
+                stage=name, roles=declared_roles, uses_evaluation=spec.uses_evaluation
+            ),
+            "prompts": self.run.gateway.prompt_fingerprint(declared_prompts),
             "version": __version__,
         }
         run_id = compute_run_id(
@@ -138,12 +166,23 @@ class Orchestrator:
             self.run.logger.info("stage cache hit", stage=name, run_id=run_id)
             return manifest
 
+        if require_cached:
+            raise StageError(
+                name,
+                "not cached, and this run was told to execute only the stages it "
+                "was asked for (--cached-deps). Run the upstream phase first; this "
+                "phase cannot rebuild the pipeline.",
+            )
+
         ctx = StageContext(run=self.run, stage=name, run_id=run_id, store=store)
         log = ctx.logger.bind(tier=spec.tier.value)
         log.info("stage start", inputs=list(consumed))
         started = utc_now()
         tick = time.monotonic()
         result = await stage.run(ctx)
+        undeclared = sorted(set(result.outputs) - set(spec.outputs))
+        if undeclared:
+            log.warning("stage emitted undeclared output(s)", outputs=undeclared)
         finished = utc_now()
         elapsed = time.monotonic() - tick
         for key, value in result.metrics.items():

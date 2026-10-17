@@ -44,11 +44,31 @@ class OpenAiEmbedder:
             }
         )
 
+    def _fit(self, text: str) -> str:
+        """Bound one input to the embedder's context, keeping both ends.
+
+        A too-long text is a hard provider error, so the head and tail are kept
+        (with an elision marker between): for the pipeline's texts the head is
+        the task/context and the tail is the completion, and summaries and
+        dedup signals live at both ends. This is input plumbing, not a judgment.
+        The marker is charged against the budget so the result never exceeds it.
+        """
+        limit = self._config.max_input_chars
+        if len(text) <= limit:
+            return text
+        marker = "\n...\n"
+        budget = limit - len(marker)
+        if budget < 2:
+            return text[:limit]
+        head = budget // 2
+        return f"{text[:head]}{marker}{text[-(budget - head) :]}"
+
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Embed ``texts`` in order, caching the whole batch by content hash."""
         if not texts:
             return []
-        key = self._cache_key(texts)
+        prepared = [self._fit(text) for text in texts]
+        key = self._cache_key(prepared)
         if self._config.cache:
             cached = self._cache.get("embedding", key)
             if isinstance(cached, list):
@@ -58,12 +78,12 @@ class OpenAiEmbedder:
             if self._config.dimensions is not None:
                 return await self._client.embeddings.create(
                     model=self._config.model,
-                    input=list(texts),
+                    input=prepared,
                     dimensions=self._config.dimensions,
                 )
             return await self._client.embeddings.create(
                 model=self._config.model,
-                input=list(texts),
+                input=prepared,
             )
 
         try:

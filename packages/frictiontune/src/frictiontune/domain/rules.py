@@ -19,23 +19,15 @@ class VerifierTier(StrEnum):
     INTENT = "intent"
 
 
-class RuleLifecycle(StrEnum):
-    """How a rule relates to existing rules on a re-run."""
-
-    NEW = "new"
-    UPDATE = "update"
-    SUPERSEDE = "supersede"
-    SPLIT = "split"
-    NOOP = "noop"
-
-
 class RuleStatus(StrEnum):
-    """The stage of a rule in its lifecycle."""
+    """A rule's lifecycle: compiled as a candidate, then promoted once verified.
+
+    ``CANDIDATE`` is set by ``compile_rules`` and ``ACTIVE`` by ``verify_rules``
+    when a rule passes the accept gate; there is no other state.
+    """
 
     CANDIDATE = "candidate"
-    VERIFIED = "verified"
     ACTIVE = "active"
-    RETIRED = "retired"
 
 
 class RuleScope(DomainModel):
@@ -57,13 +49,18 @@ class RuleVerifier(DomainModel):
 
 
 class RuleDraft(DomainModel):
-    """Agent response: one compiled rule before it is identified and verified."""
+    """Agent response: one compiled rule before it is identified and verified.
+
+    ``rationale`` is required so the generated JSON contract forces the compiler
+    to state why the rule exists; as an optional field the model omitted it on
+    every rule.
+    """
 
     applicability: str
     instruction: str
     scope: RuleScope = Field(default_factory=RuleScope)
     verifier: RuleVerifier
-    rationale: str = ""
+    rationale: str
 
 
 class RuntimeRule(RuleDraft):
@@ -71,7 +68,6 @@ class RuntimeRule(RuleDraft):
 
     id: str
     source_events: list[str] = Field(default_factory=list)
-    lifecycle: RuleLifecycle = RuleLifecycle.NEW
     status: RuleStatus = RuleStatus.CANDIDATE
     verification: RuleVerification | None = None
 

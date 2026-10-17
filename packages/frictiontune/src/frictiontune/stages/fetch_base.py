@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from frictiontune.backends.models import DEFAULT_TARGET_MODULES
 from frictiontune.core.errors import StageError
 from frictiontune.core.logging import get_logger
 from frictiontune.core.retry import RetryPolicy, with_retry
@@ -28,16 +29,6 @@ if TYPE_CHECKING:
 
 _log = get_logger(__name__)
 
-_DEFAULT_TARGET_MODULES = [
-    "q_proj",
-    "k_proj",
-    "v_proj",
-    "o_proj",
-    "gate_proj",
-    "up_proj",
-    "down_proj",
-]
-
 
 class FetchBaseSettings(StageSettings):
     """Knobs for locating and probing the base model."""
@@ -45,7 +36,6 @@ class FetchBaseSettings(StageSettings):
     repo_id: str = ""
     weights_dir: Path | None = None
     allow_download: bool = False
-    trust_remote_code: bool = False
 
 
 def _first(config: dict[str, object], keys: tuple[str, ...]) -> Any:
@@ -105,7 +95,7 @@ def probe_base(repo_dir: Path, repo_id: str) -> BaseProbe:
         num_experts=num_experts,
         quantization=quantization,
         trainable=trainable,
-        target_modules=list(_DEFAULT_TARGET_MODULES),
+        target_modules=list(DEFAULT_TARGET_MODULES),
         target_parameters=[],
         notes=notes,
     )

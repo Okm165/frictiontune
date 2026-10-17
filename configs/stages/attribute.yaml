@@ -1,3 +1,2 @@
 # attribute (extension): locate the earliest decisive step per friction event.
-batch_size: 32
 max_transcript_chars: 100000

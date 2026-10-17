@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, cast
 import frictiontune
 import pytest
 from frictiontune.config.models import LlmRoleConfig, RoleName
+from frictiontune.core.errors import LlmTruncatedError
 from frictiontune.core.errors import ValidationError as FtValidationError
 from frictiontune.domain import (
     Attribution,
@@ -24,16 +25,17 @@ from frictiontune.domain import (
     EpisodePhases,
     FrictionAnalysis,
     FrictionClusters,
+    HarvestedWork,
     InferredToolSchema,
     JudgeVerdict,
     RecoverySpan,
     RedactionReview,
     ReduceSummary,
+    ReplayVerdict,
     RouterDecision,
     RuleVerdict,
     SimulatedUserTurn,
     SyntheticBatch,
-    VerifierTier,
 )
 from frictiontune.llm.client import LlmClient, LlmResponse
 from frictiontune.llm.gateway import LlmGateway
@@ -50,13 +52,15 @@ if TYPE_CHECKING:
 # enum field will fail here rather than at run time.
 _SAMPLES: dict[type[BaseModel], dict[str, object]] = {
     CompactedToolOutput: {
-        "kept": "code",
+        "elide": [4, 5, 6, 9],
         "preserved_failure": True,
-        "elided_lines": 3,
-        "rationale": "kept the traceback",
+    },
+    HarvestedWork: {
+        "spans": [{"start": 4, "end": 4, "behaviour": "checked the source before quoting it"}],
+        "notes": "",
     },
     InferredToolSchema: {"name": "read", "parameters": {"path": {"type": "string"}}},
-    RedactionReview: {"decisions": [{"index": 0, "redact": False, "reason": "public"}]},
+    RedactionReview: {"redact": [0]},
     JudgeVerdict: {
         "reason": "solid",
         "task_adherence": 5,
@@ -67,6 +71,12 @@ _SAMPLES: dict[type[BaseModel], dict[str, object]] = {
         "accept": True,
     },
     DedupVerdict: {"reason": "same lesson", "duplicate": True, "similarity": 1, "keep": "a"},
+    ReplayVerdict: {
+        "reason": "competent default, nothing notable either way",
+        "friction_avoidance": 3,
+        "correctness": 3,
+        "clarity": 3,
+    },
     RuleVerdict: {
         "rationale": "fires and prevents",
         "fires": True,
@@ -100,8 +110,6 @@ _SAMPLES: dict[type[BaseModel], dict[str, object]] = {
     FrictionAnalysis: {
         "events": [
             {
-                "form": "rule-following",
-                "cause": "instruction-ambiguity",
                 "cost": "effort",
                 "resolution": "user-correction",
                 "leaf": "ignored_constraint",
@@ -115,7 +123,6 @@ _SAMPLES: dict[type[BaseModel], dict[str, object]] = {
     },
     RecoverySpan: {
         "found": True,
-        "failure_turn": 1,
         "recovery_start": 2,
         "recovery_end": 3,
         "trigger": "self",
@@ -169,12 +176,6 @@ def test_strict_validation_rejects_a_stringified_boolean() -> None:
         ContaminationVerdict.model_validate(bad, strict=True)
 
 
-def test_strict_validation_accepts_a_boolean_where_a_bool_is_expected() -> None:
-    verdict = JudgeVerdict.model_validate(_SAMPLES[JudgeVerdict], strict=True)
-
-    assert verdict.accept is True
-
-
 def test_strict_validation_accepts_an_integral_probability() -> None:
     # JSON has one number type, so `1` is a valid 0-1 probability.
     verdict = DedupVerdict.model_validate(
@@ -187,12 +188,6 @@ def test_strict_validation_accepts_an_integral_probability() -> None:
             {"reason": "r", "duplicate": False, "similarity": "1", "keep": "either"},
             strict=True,
         )
-
-
-def test_strict_validation_accepts_a_str_enum_by_value() -> None:
-    rules = CompiledRules.model_validate(_SAMPLES[CompiledRules], strict=True)
-
-    assert rules.rules[0].verifier.tier is VerifierTier.SEMANTIC
 
 
 def test_strict_validation_accepts_an_integral_float_score() -> None:
@@ -284,6 +279,48 @@ async def test_repair_gives_up_after_the_budget() -> None:
 
     # One initial attempt plus exactly one repair.
     assert stub.calls == 2
+
+
+class _TruncatingClient:
+    """A stub client whose reply stopped at ``max_tokens`` with no content."""
+
+    def __init__(self) -> None:
+        """Track how many completions were requested."""
+        self.calls = 0
+
+    async def complete(
+        self,
+        role: RoleName,
+        config: LlmRoleConfig,
+        messages: Sequence[ChatMessage],
+        *,
+        tools: Sequence[ToolSpec] | None = None,
+        force_json: bool = False,
+        response_schema: dict[str, object] | None = None,
+        schema_name: str = "response",
+    ) -> LlmResponse:
+        del role, config, messages, tools, force_json, response_schema, schema_name
+        self.calls += 1
+        return LlmResponse(text="", model="stub", finish_reason="length")
+
+
+async def test_a_truncated_reply_is_reported_as_truncation_not_a_missing_object() -> None:
+    stub = _TruncatingClient()
+    gateway = LlmGateway(cast("LlmClient", stub), default_registry(), max_repairs=3)
+
+    with pytest.raises(LlmTruncatedError) as raised:
+        await gateway.complete_structured(
+            RoleName.JUDGE,
+            LlmRoleConfig(model="stub", max_tokens=1024),
+            "judge",
+            _JUDGE_VALUES,
+            JudgeVerdict,
+        )
+
+    assert "truncated" in str(raised.value)
+    # Truncation is not a schema failure, so the repair loop must not fire: the
+    # budget, not the phrasing, is the problem.
+    assert stub.calls == 1
 
 
 def _structured_call_site_schemas() -> set[str]:

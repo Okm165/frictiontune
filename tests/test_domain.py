@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from frictiontune.domain.trace import (
-    Message,
-    ReasoningPart,
-    TextPart,
-    ToolPart,
-)
+from frictiontune.domain.friction import RecoverySpan
+from frictiontune.domain.trace import Message
 from pydantic import ValidationError
 
 
@@ -75,29 +71,13 @@ def test_has_tool_error_detects_failed_tool() -> None:
     assert bad.has_tool_error()
 
 
-def test_discriminated_parts_parse_into_types() -> None:
-    message = _message(
-        [
-            {"kind": "reasoning", "text": "r"},
-            {"kind": "text", "text": "t"},
-        ]
-    )
-
-    assert isinstance(message.parts[0], ReasoningPart)
-    assert isinstance(message.parts[1], TextPart)
-
-
-def test_unknown_part_kind_is_rejected() -> None:
+def test_recovery_span_requires_both_indices_when_found() -> None:
+    # A recovery with ``found`` true but no explicit end is the shape the
+    # endpoint emitted, silently discarding every candidate; it must not parse.
     with pytest.raises(ValidationError):
-        _message([{"kind": "nonsense", "text": "x"}])
+        RecoverySpan(found=True, recovery_start=4, recovery_end=None, trigger="self")
 
 
-def test_extra_fields_are_forbidden() -> None:
+def test_recovery_span_rejects_end_before_start() -> None:
     with pytest.raises(ValidationError):
-        _message([{"kind": "text", "text": "x", "surprise": 1}])
-
-
-def test_tool_arguments_default_to_empty_mapping() -> None:
-    part = ToolPart(name="read")
-    assert part.arguments == {}
-    assert part.is_error is False
+        RecoverySpan(found=True, recovery_start=5, recovery_end=3, trigger="self")

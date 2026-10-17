@@ -2,14 +2,45 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
-from frictiontune.config.loader import expand_env, load_config, parse_set_overrides
-from frictiontune.config.models import RoleName, TaxonomyConfig
+from frictiontune.config.loader import (
+    expand_env,
+    load_config,
+    load_env_file,
+    parse_set_overrides,
+)
+from frictiontune.config.models import LeafAxis, RoleName, TaxonomyConfig
 from frictiontune.core.errors import ConfigError
 from frictiontune.pipeline.registry import default_registry, validate_stage_settings
 from pydantic import ValidationError
+
+
+def test_load_env_file_reads_values(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / ".env"
+    path.write_text("FRICTIONTUNE_TEST_LOADED=hello\n", encoding="utf-8")
+    monkeypatch.delenv("FRICTIONTUNE_TEST_LOADED", raising=False)
+
+    assert load_env_file(path) == path
+    assert os.environ["FRICTIONTUNE_TEST_LOADED"] == "hello"
+
+
+def test_load_env_file_does_not_override_real_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / ".env"
+    path.write_text("FRICTIONTUNE_TEST_KEEP=from-file\n", encoding="utf-8")
+    monkeypatch.setenv("FRICTIONTUNE_TEST_KEEP", "from-env")
+
+    load_env_file(path)
+
+    assert os.environ["FRICTIONTUNE_TEST_KEEP"] == "from-env"
+
+
+def test_load_env_file_returns_none_when_missing(tmp_path: Path) -> None:
+    assert load_env_file(tmp_path / "absent.env") is None
 
 
 def test_load_config_with_hardware_preset(config_dir: Path) -> None:
@@ -27,9 +58,10 @@ def test_taxonomy_axes_and_leaves_are_loaded(config_dir: Path) -> None:
 
     assert "instruction_misread" in config.taxonomy.leaves
     assert len(config.taxonomy.leaves) >= 15
-    form, cause = config.taxonomy.leaves["instruction_misread"]
-    assert form in config.taxonomy.forms
-    assert cause in config.taxonomy.causes
+    axis = config.taxonomy.leaves["instruction_misread"]
+    assert axis.form in config.taxonomy.forms
+    assert axis.cause in config.taxonomy.causes
+    assert axis.description
 
 
 def _taxonomy(**leaves: tuple[str, str]) -> TaxonomyConfig:
@@ -38,7 +70,7 @@ def _taxonomy(**leaves: tuple[str, str]) -> TaxonomyConfig:
         causes=["known-cause"],
         costs=[],
         resolutions=[],
-        leaves=dict(leaves),
+        leaves={name: LeafAxis(form=form, cause=cause) for name, (form, cause) in leaves.items()},
     )
 
 
@@ -55,7 +87,7 @@ def test_taxonomy_leaf_must_reference_a_declared_cause() -> None:
 def test_taxonomy_consistent_leaves_are_accepted() -> None:
     taxonomy = _taxonomy(x=("known-form", "known-cause"))
 
-    assert taxonomy.leaves == {"x": ("known-form", "known-cause")}
+    assert taxonomy.leaves == {"x": LeafAxis(form="known-form", cause="known-cause")}
 
 
 def test_empty_env_expansion_drops_key(config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,3 +205,40 @@ def test_zero_valued_loop_bounds_are_rejected_up_front(
 
     with pytest.raises(ConfigError, match=f"invalid config for stage '{stage}'"):
         validate_stage_settings(config, default_registry())
+
+
+def test_semantic_fingerprint_ignores_where_models_are_served(config_dir: Path) -> None:
+    base = load_config(config_dir)
+    moved = base.model_copy(
+        deep=True,
+        update={
+            "embedding": base.embedding.model_copy(
+                update={"base_url": "http://elsewhere.invalid:9998/v1"}
+            )
+        },
+    )
+    for name, role in base.llm.items():
+        moved.llm[name] = role.model_copy(update={"base_url": "http://elsewhere.invalid:9999/v1"})
+
+    # Each phase of a pipeline starts a different set of servers, so endpoints
+    # differ by phase while nothing a stage decides has changed. If they were in
+    # the fingerprint, every phase would re-key every stage and the stage cache
+    # could never be hit across a phase boundary.
+    assert moved.semantic_fingerprint() == base.semantic_fingerprint()
+
+
+def test_semantic_fingerprint_notices_a_change_that_can_move_a_decision(
+    config_dir: Path,
+) -> None:
+    base = load_config(config_dir)
+    retuned = base.model_copy(deep=True)
+    retuned.llm[RoleName.JUDGE] = retuned.llm[RoleName.JUDGE].model_copy(
+        update={"temperature": 0.9}
+    )
+    uncapped = base.model_copy(deep=True)
+    uncapped.llm[RoleName.JUDGE] = uncapped.llm[RoleName.JUDGE].model_copy(
+        update={"max_tokens": 4096}
+    )
+
+    assert retuned.semantic_fingerprint() != base.semantic_fingerprint()
+    assert uncapped.semantic_fingerprint() != base.semantic_fingerprint()

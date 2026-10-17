@@ -84,10 +84,15 @@ uv run frictiontune validate --config-dir configs
 # See every stage and its ROI contract.
 uv run frictiontune stages
 
-# Dry-run the core pipeline.
-uv run frictiontune run --hardware 3x24g --dry-run
+# Dry-run the core pipeline. `--hardware generic` (or omitting --hardware) runs
+# one rank per visible accelerator with a conservative single-card budget — the
+# right first run on a box you have not characterised.
+uv run frictiontune run --hardware generic --dry-run
 
 # Run it.
+uv run frictiontune run --hardware generic
+
+# Once you know your box's budget, pick or author a preset (configs/hardware/):
 uv run frictiontune run --hardware 3x24g
 
 # Explore artifacts of the last run.
@@ -96,7 +101,7 @@ uv run frictiontune report
 uv run frictiontune dashboard
 
 # Measure the friction analyst against the golden episodes (calls an LLM).
-uv run frictiontune eval-prompts --hardware 3x24g
+uv run frictiontune eval-prompts --hardware generic
 ```
 
 ## Documentation

@@ -14,10 +14,11 @@ from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from frictiontune.application import Application
-from frictiontune.config.loader import load_config, parse_set_overrides
+from frictiontune.config.loader import load_config, load_env_file, parse_set_overrides
 from frictiontune.core.errors import FrictionTuneError
 from frictiontune.evaluation import GoldenReport, evaluate_golden, load_bundled_golden, load_golden
 from frictiontune.pipeline.dag import full_graph
@@ -62,6 +63,7 @@ def _load(
     overrides: Sequence[str],
 ) -> RunConfig:
     """Load a validated run configuration from the layered config tree."""
+    load_env_file()
     return load_config(
         config_dir,
         hardware_preset=hardware,
@@ -71,7 +73,10 @@ def _load(
 
 
 def _fail(message: str, code: int = 1) -> typer.Exit:
-    console.print(f"[bold red]error:[/] {message}")
+    # Escape the message: stage errors are written as "[stage] detail", and Rich
+    # would otherwise read the stage name as a markup tag and drop it — exactly
+    # the part of the message a reader needs.
+    console.print(f"[bold red]error:[/] {escape(message)}")
     return typer.Exit(code)
 
 
@@ -175,6 +180,11 @@ def run(
     include_deps: bool = typer.Option(
         False, "--include-deps/--no-include-deps", help="Add upstream stages."
     ),
+    cached_deps: bool = typer.Option(
+        False,
+        "--cached-deps",
+        help="Run only the named stages; every upstream stage must already be cached.",
+    ),
     allow_gated: bool = typer.Option(False, "--allow-gated", help="Permit Tier C stages to run."),
     force: bool = typer.Option(False, "--force", help="Ignore cached stage manifests."),
     pipeline: str = typer.Option(_DEFAULT_PIPELINE, "--pipeline", help="Pipeline name."),
@@ -214,7 +224,11 @@ def run(
             allow_gated=allow_gated,
         )
         try:
-            return await orchestrator.execute(selected, include_dependencies=include_deps)
+            return await orchestrator.execute(
+                selected,
+                include_dependencies=include_deps,
+                cached_dependencies_only=cached_deps,
+            )
         finally:
             await application.aclose()
 
