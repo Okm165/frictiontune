@@ -234,8 +234,10 @@ repository ships instances of each knob, not the only values.
   (`FT_HARDWARE` overrides) because that box is where the measurements in the
   journal were taken — the pipeline itself never reads a machine name.
 - **Corpus** — a reader is one class satisfying the `CorpusReader` protocol
-  (`frictiontune.corpus`): yield `(session, messages, stats)` chronologically.
-  `OpenCodeCorpus` is the first implementation; redaction and compaction happen
+  (`frictiontune.corpus`): construct with the source path, yield
+  `(session, messages, stats)` chronologically. Register it in `READERS` and
+  set `stages.ingest.corpus_format` — that is the whole integration;
+  `OpenCodeCorpus` is the first implementation. Redaction and compaction happen
   downstream, so a new source only owes faithful roles, sorting timestamps, and
   honest tool-call structure.
 - **Taxonomy** — the friction taxonomy (leaves, forms, causes) lives in

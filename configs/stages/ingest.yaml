@@ -1,2 +1,4 @@
 # ingest: read the source corpus (read-only, streamed session by session).
 min_messages: 1
+# The registered reader to use (frictiontune.corpus.READERS).
+corpus_format: opencode

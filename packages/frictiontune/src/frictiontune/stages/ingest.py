@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from frictiontune.core.errors import StageError
 from frictiontune.core.hashing import file_sha256
-from frictiontune.corpus.opencode import CorpusStats, OpenCodeCorpus
+from frictiontune.corpus import CorpusStats, get_reader
 from frictiontune.pipeline.spec import CostProfile, Lead, StageSpec, Tier
 from frictiontune.pipeline.stage import Stage, StageResult, StageSettings
 
@@ -25,9 +25,13 @@ if TYPE_CHECKING:
 
 
 class IngestSettings(StageSettings):
-    """Where to read the corpus from and how much of it to take."""
+    """Where to read the corpus from, in what format, and how much to take."""
 
     db_path: Path | None = None
+    # The registered reader to use (see frictiontune.corpus.READERS). The
+    # pipeline is corpus-agnostic: a new chat-log source is one reader class
+    # and this name.
+    corpus_format: str = "opencode"
     limit_sessions: int | None = None
     min_messages: int = 1
 
@@ -71,7 +75,7 @@ class Ingest(Stage):
         """Read the database and emit messages, sessions, and a parse report."""
         settings = ctx.settings(self.settings_model)
         db = _resolve_db(settings, ctx)
-        corpus = OpenCodeCorpus(db)
+        corpus = get_reader(settings.corpus_format)(db)
 
         session_sink = ctx.jsonl_sink("sessions")
         totals = CorpusStats()
