@@ -54,7 +54,10 @@ class Ingest(Stage):
         lead=Lead.CORE,
         roi="High",
         justification="Nothing downstream exists without canonical turns.",
-        evidence=["opencode.db: 153 sessions, 16,238 messages"],
+        evidence=[
+            "measured corpora span 471-message samples to 12,296-message "
+            "production slices; ingest is O(messages), streamed"
+        ],
         cost=CostProfile(compute="cpu", api_usd="none", maintenance="low"),
         inputs={},
         outputs={"messages": "jsonl", "sessions": "jsonl", "ingest_report": "json"},

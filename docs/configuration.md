@@ -230,9 +230,9 @@ repository ships instances of each knob, not the only values.
   ships `generic.yaml` plus instances (`1x24g`, `2x24g`, `3x24g`,
   `cloud-h100x4`, `mi300x-192g`); copy one and set `devices`,
   `per_device_batch`, `grad_accum`, `dtype`, `quant`, `gradient_checkpointing`,
-  and `max_seq_len`. The `ft_pod.sh` launcher defaults to `3x24g`
-  (`FT_HARDWARE` overrides) because that box is where the measurements in the
-  journal were taken — the pipeline itself never reads a machine name.
+  and `max_seq_len`. The `ft_pod.sh` launcher defaults to `generic` (the
+  any-box preset); pin `FT_HARDWARE` to an instance for a benchmarked,
+  repeatable box — the pipeline itself never reads a machine name.
 - **Corpus** — a reader is one class satisfying the `CorpusReader` protocol
   (`frictiontune.corpus`): construct with the source path, yield
   `(session, messages, stats)` chronologically. Register it in `READERS` and

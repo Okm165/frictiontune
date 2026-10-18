@@ -97,7 +97,9 @@ EMBED_UBATCH="${FT_EMBED_UBATCH:-4096}"
 # Training topology (including the DDP world size) comes from the hardware
 # preset, so it is not overridden here.
 PIPELINE="${FT_PIPELINE:-v10}"
-HARDWARE="${FT_HARDWARE:-3x24g}"
+# "generic" is the any-box preset (devices: auto, conservative budget); pin
+# FT_HARDWARE to an instance (e.g. 3x24g) for a benchmarked, repeatable box.
+HARDWARE="${FT_HARDWARE:-generic}"
 CORPUS_DB="${FT_CORPUS_DB:-.context/medium.db}"
 EVAL_EXAMPLES="${FT_EVAL_EXAMPLES:-16}"
 # The adapter the replay serves is the one *this* pipeline trained, so the glob is
