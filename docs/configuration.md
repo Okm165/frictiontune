@@ -52,7 +52,7 @@ variable is unset instead of collapsing to `.`.
 | `llm` | `dict[RoleName, LlmRoleConfig]` | One binding per role. |
 | `embedding` | `EmbeddingConfig` | Retrieval/calibration/clustering embeddings. |
 | `taxonomy` | `TaxonomyConfig` | Forms, causes, costs, resolutions, leaves. |
-| `evaluation` | `EvaluationConfig` | Time split and T1–T4 toggles. |
+| `evaluation` | `EvaluationConfig` | Time split and T1–T4 toggles, replay seeds, the pre-registered `min_important_delta` bar. |
 | `stages` | `dict[str, dict]` | Per-stage settings blocks. |
 
 `RunConfig.role(RoleName.X)` returns that role or raises a clear error if it is
@@ -176,7 +176,9 @@ declared form/cause, so the taxonomy is self-consistent by construction.
 
 `EvaluationConfig` controls the trustworthiness of the headline number:
 
-* `time_split_quantile` — where the strict time split falls (default `0.8`); the
+* `time_split_quantile` — where the strict time split falls (default `0.6`; 0.8 held
+  out only the newest session, below the six paired episodes any 0.05-level claim
+  needs); the
   split is enforced over real work, so training never sees evaluation-time data
   and generated (synthetic) examples always train rather than being held out.
 * `t1_exact_ngram` … `t4_task_level` — which contamination tiers run.

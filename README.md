@@ -117,9 +117,25 @@ uv run frictiontune eval-prompts --hardware generic
 
 ## Status
 
-An early-stage proof of concept. The data pipeline is complete and runnable; the
-training backend is real but requires a GPU box and a bf16 base checkpoint. GGUF
-weights cannot be QLoRA-trained — provide a Hugging Face checkpoint.
+The data pipeline, training backend, and measurement stack are complete and
+runnable end to end (measured on a 3-GPU ROCm box with llama.cpp servers and a
+QLoRA trainer). The replay dashboard carries its own measurement honesty —
+power floors, session-clustered statistics, score histograms, and a
+pre-registered effect-size bar — and the whole pipeline is content-addressed:
+every stage is cached, resumable, and re-keyed by exactly the inputs that
+change its output.
+
+Evidence-gated extensions add the research surface: a learning curve (is more
+data the lever?), a capability probe (did tuning damage general skill?),
+rules-in-replay (the deployed configuration), and preference training
+(DPO on failures mined from the corpus — the negative half positive-only SFT
+cannot express). One open prerequisite gates the conclusions: a small
+**human-labeled golden set** anchoring the judge — the label audit showed an
+independent rubric recognizes only a third of the flagged frictions, and only
+human labels can separate judge blindness from label error.
+
+Training requires a GPU box and a bf16 base checkpoint; GGUF weights cannot be
+QLoRA-trained — provide a Hugging Face checkpoint.
 
 ## License
 

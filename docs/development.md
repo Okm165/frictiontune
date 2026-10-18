@@ -197,6 +197,7 @@ bottleneck:
 | `ft_pod.sh data` | `decontaminate`, `verify_rules` (every LLM stage) | local llama.cpp on **all** GPUs |
 | `ft_pod.sh train` | `train_sft` | **DDP across all cards**, servers evicted |
 | `ft_pod.sh replay` | `evaluate_replay`, `export` | base, adapter, and (local) judge on separate cards |
+| `ft_pod.sh curve` | `learning_curve` (gated) | **DDP across all cards**, servers evicted |
 | `ft_pod.sh all` | all three, in order | — |
 
 All phases pass identical run flags, so they resolve the same `run_id` and later

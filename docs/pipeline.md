@@ -197,7 +197,7 @@ threshold making the semantic call.
 ### `decontaminate`
 
 **In:** `curated`, `judged`.
-**Out:** `train` (JSONL), `eval` (JSONL), `contamination_report` (JSON).
+**Out:** `train` (JSONL), `val` (JSONL), `eval` (JSONL), `contamination_report` (JSON).
 **Cost:** mixed · medium API.
 
 Makes the friction-drop number trustworthy. The split is a strict **time split**
@@ -215,14 +215,28 @@ boundary:
 A "lucky pass" flag records cases the eval set only passes because of leakage.
 Relaxing a tier is a deliberate, recorded decision, not a default.
 
+After the tiers, the stage carves a **validation set** out of the newest
+train-side sessions (`val_fraction`, default 0.2) for early stopping and
+best-checkpoint selection: selecting the adapter on the held-out episodes is
+selection bias in performance evaluation (Cawley & Talbot, JMLR 2010). The
+report lists track composition per side and warns when the held-out side
+contains no recovery-track episodes — the replay then measures clean-context
+behaviour only, which is the single-user-corpus regime the contamination tiers
+produce.
+
 ### `train_sft`
 
 **In:** `train`, `base_probe`.
 **Out:** `training_result` (JSON), `adapter` (JSON).
 **Cost:** gpu · no API.
 
-Thin by design: validates the base probe, builds a typed `TrainingRequest`, and
-delegates to the registered **training backend** behind one seam. The MoE trap is
+Thin by design: validates the base probe, derives the epoch budget (at least
+`min_steps` optimizer steps, capped by `max_epochs`) and a `val`-based
+early-stopping/best-checkpoint contract, then delegates to the registered
+**training backend** behind one seam. `known_fraction` runs the Gekhman arm:
+records whose loss at base init is highest — the facts the model does not
+already know — are dropped before training, with the per-record familiarity
+table written next to the adapter as evidence. The MoE trap is
 handled upstream — `target_parameters` is empty by default so LoRA never attaches
 to fused expert weights. If no backend is registered (no GPU package installed),
 the stage fails with a clear message rather than importing torch.
@@ -235,10 +249,16 @@ the stage fails with a clear message rather than importing torch.
 
 The finish line. Each held-out example is replayed through **both** the base model
 (`target`) and the served adapter (`adapter`) from the **same** context, then
-scored by the shared judge. A dashboard of independent signals is built with a
-seeded bootstrap interval, so a small or noisy difference from the model change is
-visible as such rather than sold as a win. Headline signal: `friction_avoidance`
-(higher-better).
+scored by the shared judge (temperature 0, single trial — baselines reproduce
+exactly). The dashboard carries the measurement's honesty in the artifact:
+exact paired sign-test p and the instrument's power floor (`n >= 6` or no
+0.05-level claim is attainable), session-clustered statistics (episodes of one
+session are not independent), raw score histograms (the judge's compression is
+visible, not hidden in means), the pre-registered `min_important_delta` verdict,
+and the context budget **derived from `hardware.max_seq_len`** so evaluation
+stays in the regime the adapter was trained in. `inject_rules` replays with the
+verified runtime rules on both sides — the deployed configuration rather than
+weights alone. Headline signal: `friction_avoidance` (higher-better).
 
 ### `export`
 
