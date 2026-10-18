@@ -1446,7 +1446,11 @@ class PreferencePairsSettings(StageSettings):
     # The pairs inherit the friction analyst's label noise (GAP-101: the
     # ensemble controls variance, not bias). A floor on the event's own
     # confidence drops the shakiest judgments before they become training
-    # signal; 0 keeps everything and relies on the golden-set audit instead.
+    # signal. MEASURED (2026-10-18, 36 flagged frictions): the analyst's
+    # confidence carries NO signal about which frictions an independent judge
+    # recognizes — recognized mean 0.94, unrecognized mean 0.94 — so this knob
+    # is dead weight until the golden-set audit (GAP-100) establishes what
+    # actually predicts label quality. Kept for that audit to re-evaluate.
     min_event_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     max_pair_context_chars: int = Field(default=24_000, ge=1)
     max_pairs: int = Field(default=0, ge=0)  # 0 = all
