@@ -221,3 +221,31 @@ The fastest way to see the full contract is `.env.example`. The important groups
 
 `--set key=value` is resolved with `parse_set_overrides` and can override anything,
 including nested keys (`hardware.devices=2`, `evaluation.time_split_quantile=0.7`).
+## Making it yours
+
+The pipeline is deliberately source-, hardware-, and taxonomy-agnostic; the
+repository ships instances of each knob, not the only values.
+
+- **Hardware** — a preset is six numbers, not a machine. `configs/hardware/`
+  ships `generic.yaml` plus instances (`1x24g`, `2x24g`, `3x24g`,
+  `cloud-h100x4`, `mi300x-192g`); copy one and set `devices`,
+  `per_device_batch`, `grad_accum`, `dtype`, `quant`, `gradient_checkpointing`,
+  and `max_seq_len`. The `ft_pod.sh` launcher defaults to `3x24g`
+  (`FT_HARDWARE` overrides) because that box is where the measurements in the
+  journal were taken — the pipeline itself never reads a machine name.
+- **Corpus** — a reader is one class satisfying the `CorpusReader` protocol
+  (`frictiontune.corpus`): yield `(session, messages, stats)` chronologically.
+  `OpenCodeCorpus` is the first implementation; redaction and compaction happen
+  downstream, so a new source only owes faithful roles, sorting timestamps, and
+  honest tool-call structure.
+- **Taxonomy** — the friction taxonomy (leaves, forms, causes) lives in
+  `configs/friction_taxonomy.yaml` and is validated at load (every leaf must
+  reference known form/cause axes). Editing it changes what the detector looks
+  for — and correctly re-keys every stage that consumes it.
+- **Models and endpoints** — role bindings (`configs/roles.yaml`) plus
+  environment overlays (`configs/environments/`: `local` for in-pod llama.cpp,
+  `example` as a template, `bitdeer` as an instance). `FRICTIONTUNE_LLM_MODEL_PATH`
+  selects the served model; `fetch_base` probes the fine-tuning base.
+- **Prompts** — the library (`llm/prompts/library/*.md`) is files with
+  frontmatter; their contents hash into the run ids of exactly the stages that
+  call them, so editing one is safe and visible.
