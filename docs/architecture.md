@@ -97,6 +97,14 @@ A stage invocation is identified by a **run id**: a hash of
 (stage name, stage config block, code revision, hashes of input artifacts)
 ```
 
+scoped to what can change the stage's output: the config block is narrowed to
+the stage's own settings plus the role bindings it declares (`roles`) and the
+prompts it calls (`prompts`), and the evaluation policy enters only for stages
+that read it (`uses_evaluation`) — so editing a *measurement* knob or a prompt
+re-keys exactly its consumers, never the whole data phase. Prompt and partial
+*contents* hash alongside the file text, so editing a shared partial is visible
+too.
+
 Before running a stage the orchestrator looks for a manifest with that run id. If
 one exists and `--force` is not set, the stage is skipped and its recorded
 outputs are re-published into the catalog. Re-running a pipeline therefore does
